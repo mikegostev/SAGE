@@ -1,8 +1,11 @@
 package uk.ac.ebi.age.storage.impl;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.concurrent.Future;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import uk.ac.ebi.age.AgeResolver;
 import uk.ac.ebi.age.ext.log.LogNode;
@@ -18,36 +21,82 @@ import uk.ac.ebi.age.query.AgeQuery;
 import uk.ac.ebi.age.storage.AgeStorageAdm;
 import uk.ac.ebi.age.storage.ConnectionInfo;
 import uk.ac.ebi.age.storage.DataChangeListener;
+import uk.ac.ebi.age.storage.DataModuleReaderWriter;
 import uk.ac.ebi.age.storage.MaintenanceModeListener;
 import uk.ac.ebi.age.storage.RelationResolveException;
 import uk.ac.ebi.age.storage.exeption.AttachmentIOException;
 import uk.ac.ebi.age.storage.exeption.IndexIOException;
 import uk.ac.ebi.age.storage.exeption.ModuleStoreException;
+import uk.ac.ebi.age.storage.impl.ser.SerializedStorageConfiguration;
 import uk.ac.ebi.age.storage.index.AttachedSortedTextIndex;
 import uk.ac.ebi.age.storage.index.AttachedTextIndex;
 import uk.ac.ebi.age.storage.index.KeyExtractor;
 import uk.ac.ebi.age.storage.index.TextFieldExtractor;
 import uk.ac.ebi.age.storage.index.TextIndex;
+import uk.ac.ebi.mg.executor.DefaultExecutorService;
+import uk.ac.ebi.mg.filedepot.FileDepot;
+
+import com.pri.util.M2codec;
+import com.pri.util.collection.KeyHolderCache;
 
 public class SageStorage implements AgeStorageAdm, AgeResolver
 {
+ private final KeyHolderCache<ModuleKey, DataModuleWritable> moduleCache = new KeyHolderCache<ModuleKey, DataModuleWritable>();
+ 
+ private SemanticModel model;
+ 
+ private final ReentrantReadWriteLock dbLock = new ReentrantReadWriteLock();
+ 
+ private final DataModuleReaderWriter submRW = new SerializedDataModuleReaderWriter();
+
+ private final Collection<DataChangeListener> chgListeners = new ArrayList<DataChangeListener>(3);
+ private final Collection<MaintenanceModeListener> mmodListeners = new ArrayList<MaintenanceModeListener>(3);
+ 
+ private FileDepot dataDepot; 
+ private FileDepot fileDepot; 
+ 
+ private final boolean master = false;
+ 
+ private volatile boolean maintenanceMode = false;
+ 
+ private volatile long mModeTimeout=0;
+
+ private long lastUpdate;
+ 
+ private boolean dataDirty = false;
+ 
+ private final SerializedStorageConfiguration config;
+ 
+ private volatile Future<?> mmodeWDTimerFuture;
+
 
  @Override
  public void lockRead()
  {
-  // TODO Auto-generated method stub
-
+  dbLock.readLock().lock();
  }
 
  @Override
  public void unlockRead()
  {
-  // TODO Auto-generated method stub
+  dbLock.readLock().unlock();
+ }
 
+ 
+ @Override
+ public void lockWrite()
+ {
+  dbLock.writeLock().lock();
  }
 
  @Override
- public Collection<AgeObject> executeQuery(AgeQuery qury)
+ public void unlockWrite()
+ {
+  dbLock.writeLock().unlock();
+ }
+
+ @Override
+ public Iterable<AgeObject> executeQuery(AgeQuery qury)
  {
   // TODO Auto-generated method stub
   return null;
@@ -56,8 +105,39 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  @Override
  public SemanticModel getSemanticModel()
  {
+  return model;
+ }
+
+
+ @Override
+ public boolean updateSemanticModel(SemanticModel sm, LogNode log)
+ {
   // TODO Auto-generated method stub
-  return null;
+  return false;
+ }
+ 
+ @Override
+ public AgeClass getDefinedAgeClass(String className)
+ {
+  return model.getDefinedAgeClass(className);
+ }
+ 
+ @Override
+ public AgeAttributeClass getDefinedAgeAttributeClass(String className)
+ {
+  return model.getDefinedAgeAttributeClass(className);
+ }
+ 
+ @Override
+ public AgeRelationClass getDefinedAgeRelationClass(String className)
+ {
+  return model.getDefinedAgeRelationClass(className);
+ }
+ 
+ @Override
+ public AgeRelationClass getCustomAgeRelationClass(String className, ModuleKey modKey)
+ {
+  return getDataModule(modKey).getContextSemanticModel().getCustomAgeRelationClass(className);
  }
 
  @Override
@@ -84,15 +164,19 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  @Override
  public void addDataChangeListener(DataChangeListener dataChangeListener)
  {
-  // TODO Auto-generated method stub
-
+  synchronized(chgListeners)
+  {
+   chgListeners.add(dataChangeListener);
+  }
  }
-
+ 
  @Override
  public void addMaintenanceModeListener(MaintenanceModeListener mmListener)
  {
-  // TODO Auto-generated method stub
-
+  synchronized(mmodListeners)
+  {
+   mmodListeners.add(mmListener);
+  }
  }
 
  @Override
@@ -120,44 +204,36 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  @Override
  public File getAttachment(String id)
  {
-  // TODO Auto-generated method stub
-  return null;
+  return getAttachmentBySysRef(makeFileSysRef(id));
  }
 
+ 
  @Override
- public File getAttachment(String id, String clustId)
+ public File getAttachment(String id, String clusterId)
  {
-  // TODO Auto-generated method stub
-  return null;
+  return getAttachmentBySysRef(makeFileSysRef(id, clusterId));
+ }
+ 
+ private File getAttachmentBySysRef(String ref)
+ {
+  File f = fileDepot.getFilePath(ref);
+  
+  if( ! f.exists() )
+   return null;
+  
+  return f;
  }
 
- @Override
- public AgeClass getDefinedAgeClass(String className)
+ private String makeFileSysRef(String id)
  {
-  // TODO Auto-generated method stub
-  return null;
+  return "G"+M2codec.encode(id);
  }
 
- @Override
- public AgeAttributeClass getDefinedAgeAttributeClass(String className)
+ private String makeFileSysRef(String id, String clustID)
  {
-  // TODO Auto-generated method stub
-  return null;
+  return String.valueOf(id.length())+'_'+M2codec.encode(id+clustID);
  }
 
- @Override
- public AgeRelationClass getDefinedAgeRelationClass(String className)
- {
-  // TODO Auto-generated method stub
-  return null;
- }
-
- @Override
- public AgeRelationClass getCustomAgeRelationClass(String className, ModuleKey modKey)
- {
-  // TODO Auto-generated method stub
-  return null;
- }
 
  @Override
  public AgeObjectWritable getGlobalObject(String objID)
@@ -188,12 +264,6 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
 
  }
 
- @Override
- public boolean updateSemanticModel(SemanticModel sm, LogNode log)
- {
-  // TODO Auto-generated method stub
-  return false;
- }
 
  @Override
  public void shutdown()
@@ -202,19 +272,6 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
 
  }
 
- @Override
- public void lockWrite()
- {
-  // TODO Auto-generated method stub
-
- }
-
- @Override
- public void unlockWrite()
- {
-  // TODO Auto-generated method stub
-
- }
 
  @Override
  public DataModuleWritable getDataModule(String clstId, String name)
@@ -223,6 +280,14 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
   return null;
  }
 
+ @Override
+ public DataModuleWritable getDataModule(ModuleKey modk )
+ {
+  // TODO Auto-generated method stub
+  return null;
+ }
+
+ 
  @Override
  public Collection< ? extends DataModuleWritable> getDataModules()
  {
@@ -257,28 +322,154 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
   // TODO Auto-generated method stub
 
  }
+ 
+ private void rebuildDirtyIndices()
+ {
+  // TODO Auto-generated method stub
+  
+ }
+
+ private boolean enterMMode( long timeout )
+ {
+  try
+  {
+   lockWrite();
+   
+   if(maintenanceMode)
+   {
+    if( timeout > mModeTimeout )
+     mModeTimeout = timeout;
+    
+    return false;
+   }
+   
+   mModeTimeout = timeout;
+   maintenanceMode = true;
+   
+   mmodeWDTimerFuture = DefaultExecutorService.getExecutorService().submit( new Runnable()
+   {
+
+    @Override
+    public void run()
+    {
+     long wtCycle =0;
+
+     Thread myThread = Thread.currentThread();
+     String thName = myThread.getName();
+     
+     myThread.setName("MMode watchdog timer");
+
+     while(true)
+     {
+      wtCycle = mModeTimeout + 500;
+      
+      try
+      {
+       Thread.sleep(wtCycle);
+      }
+      catch(InterruptedException e)
+      {
+      }
+
+      if(!maintenanceMode)
+       return;
+
+      if((System.currentTimeMillis() - lastUpdate) > mModeTimeout && ! dbLock.isWriteLocked() )
+      {
+       if( dbLock.writeLock().tryLock() )
+       {
+        try
+        {
+         mmodeWDTimerFuture = null;
+         leaveMMode();
+         return;
+        }
+        finally
+        {
+         dbLock.writeLock().unlock();
+         myThread.setName(thName);
+        }
+       }
+
+      }
+
+     }
+    }
+   });
+
+  }
+  finally
+  {
+   unlockWrite();
+  }
+  
+  synchronized(mmodListeners)
+  {
+   for(MaintenanceModeListener mml : mmodListeners)
+     mml.enterMaintenanceMode();
+  }
+  
+  return true;
+ }
+
+ private boolean leaveMMode()
+ {
+  boolean dataModified = dataDirty;
+  
+  try
+  {
+   lockWrite();
+
+   if(! maintenanceMode )
+    return false;
+
+   rebuildDirtyIndices();
+   
+   dataDirty = false;
+   
+   maintenanceMode = false;
+   
+   if( mmodeWDTimerFuture != null )
+    mmodeWDTimerFuture.cancel( true );
+  }
+  finally
+  {
+   unlockWrite();
+  }
+
+  if( dataModified )
+  {
+   synchronized(chgListeners)
+   {
+    for(DataChangeListener chls : chgListeners )
+     chls.dataChanged();
+   }
+  }
+  
+  synchronized(mmodListeners)
+  {
+   for(MaintenanceModeListener mml : mmodListeners)
+     mml.exitMaintenanceMode();
+  }
+
+  return true;
+ }
+
 
  @Override
- public boolean setMaintenanceMode(boolean mmode)
+ public boolean setMaintenanceMode( boolean mmode )
  {
-  // TODO Auto-generated method stub
-  return false;
+  return setMaintenanceMode(mmode, config.getMaintenanceModeTimeout());
  }
 
  @Override
- public boolean setMaintenanceMode(boolean mmode, long timeout)
+ public boolean setMaintenanceMode( boolean mmode, long timeout )
  {
-  // TODO Auto-generated method stub
-  return false;
+  if( mmode )
+   return enterMMode(timeout);
+  else
+   return leaveMMode();
  }
 
- /**
-  * @param args
-  */
- public static void main(String[] args)
- {
-  // TODO Auto-generated method stub
-
- }
 
 }

@@ -8,6 +8,7 @@ import uk.ac.ebi.age.model.AgeObject;
 import uk.ac.ebi.age.model.DataModule;
 import uk.ac.ebi.age.model.ModuleKey;
 import uk.ac.ebi.age.model.SemanticModel;
+import uk.ac.ebi.age.model.writable.DataModuleWritable;
 import uk.ac.ebi.age.query.AgeQuery;
 import uk.ac.ebi.age.storage.exeption.IndexIOException;
 import uk.ac.ebi.age.storage.index.AttachedSortedTextIndex;
@@ -21,14 +22,14 @@ public interface AgeStorage
  void lockRead();
  void unlockRead();
  
- Collection<AgeObject> executeQuery( AgeQuery qury );
+ Iterable<AgeObject> executeQuery( AgeQuery qury );
  
 
  SemanticModel getSemanticModel();
  
  void shutdown();
 
- public Collection<? extends AgeObject> getAllObjects();
+ public Iterable<AgeObject> getAllObjects();
  public AgeObject getGlobalObject(String objID);
  public AgeObject getClusterObject(String clustId, String objID);
  AgeObject getObject(String clusterId, String moduleId, String objectId);
@@ -54,5 +55,7 @@ public interface AgeStorage
 
  File getAttachment(String id);
  File getAttachment(String id, String clustId);
+
+ DataModuleWritable getDataModule(ModuleKey modk);
 
 }
