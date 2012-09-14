@@ -22,8 +22,6 @@ import uk.ac.ebi.age.conf.Constants;
 import uk.ac.ebi.age.ext.log.LogNode;
 import uk.ac.ebi.age.ext.log.LogNode.Level;
 import uk.ac.ebi.age.ext.log.SimpleLogNode;
-import uk.ac.ebi.age.log.BufferLogger;
-import uk.ac.ebi.age.log.TooManyErrorsException;
 import uk.ac.ebi.age.model.AgeAttribute;
 import uk.ac.ebi.age.model.AgeObject;
 import uk.ac.ebi.age.model.AgeRelationClass;

@@ -13,9 +13,14 @@ import uk.ac.ebi.age.storage.exeption.ModuleStoreException;
 
 public interface AgeStorageAdm extends AgeStorage
 {
+ @Override
  public AgeObjectWritable getGlobalObject(String objID);
+ 
+ @Override
  public AgeObjectWritable getClusterObject(String clustId, String objID);
- public Collection<? extends AgeObjectWritable> getAllObjects();
+ 
+ @Override
+ public Iterable<AgeObjectWritable> getAllObjects();
 
  
  void update(Collection<DataModuleWritable> modListToIns, Collection<ModuleKey> modListToDel, ConnectionInfo conninf) throws RelationResolveException, ModuleStoreException;
@@ -23,12 +28,14 @@ public interface AgeStorageAdm extends AgeStorage
  boolean updateSemanticModel( SemanticModel sm, LogNode log ); // throws ModelStoreException;
 
 // void init( String initStr) throws StorageInstantiationException;
+ @Override
  void shutdown();
 
  void lockWrite();
  void unlockWrite();
 
  DataModuleWritable getDataModule(String clstId, String name);
+ @Override
  Collection<? extends DataModuleWritable> getDataModules();
 
  

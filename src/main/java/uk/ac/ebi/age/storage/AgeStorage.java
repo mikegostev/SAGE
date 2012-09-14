@@ -22,29 +22,26 @@ public interface AgeStorage
  void lockRead();
  void unlockRead();
  
- Iterable<AgeObject> executeQuery( AgeQuery qury );
+ Iterable<? extends AgeObject> executeQuery( AgeQuery qury );
  
 
  SemanticModel getSemanticModel();
  
  void shutdown();
 
- public Iterable<AgeObject> getAllObjects();
- public AgeObject getGlobalObject(String objID);
- public AgeObject getClusterObject(String clustId, String objID);
- AgeObject getObject(String clusterId, String moduleId, String objectId);
+ Iterable<? extends AgeObject> getAllObjects();
 
-// boolean hasObject(String id);
- boolean hasDataModule(String clstId, String id);
+ AgeObject getGlobalObject(String objID);
+ AgeObject getClusterObject(String clustId, String objID);
+ AgeObject getObject(ModuleKey modk, String objectId);
+
  boolean hasDataModule(ModuleKey mk);
 
  void addDataChangeListener(DataChangeListener dataChangeListener);
  void addMaintenanceModeListener(MaintenanceModeListener mmListener);
  
-
- DataModule getDataModule(String clstId, String name);
-
- Collection<? extends DataModule> getDataModules();
+ Iterable<? extends DataModule> getDataModules();
+ DataModuleWritable getDataModule(ModuleKey modk);
 
 
  AttachedTextIndex createAttachedTextIndex(String name, AgeQuery qury, Collection<TextFieldExtractor> cb ) throws IndexIOException;
@@ -56,6 +53,5 @@ public interface AgeStorage
  File getAttachment(String id);
  File getAttachment(String id, String clustId);
 
- DataModuleWritable getDataModule(ModuleKey modk);
 
 }

@@ -4,9 +4,14 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import jdbm.PrimaryTreeMap;
 import uk.ac.ebi.age.AgeResolver;
 import uk.ac.ebi.age.ext.log.LogNode;
 import uk.ac.ebi.age.model.AgeAttributeClass;
@@ -55,6 +60,10 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  private FileDepot dataDepot; 
  private FileDepot fileDepot; 
  
+ private PrimaryTreeMap<String,ModuleKey> globalObjectMap;
+ private PrimaryTreeMap<ModuleKey,ModuleKey> clusterObjectMap;
+ private PrimaryTreeMap<ModuleKey,Object> moduleSet;
+ 
  private final boolean master = false;
  
  private volatile boolean maintenanceMode = false;
@@ -96,10 +105,9 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  }
 
  @Override
- public Iterable<AgeObject> executeQuery(AgeQuery qury)
+ public Iterable<? extends AgeObject> executeQuery(AgeQuery qury)
  {
-  // TODO Auto-generated method stub
-  return null;
+  return new QueryProcessor(qury);
  }
 
  @Override
@@ -141,24 +149,21 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  }
 
  @Override
- public AgeObject getObject(String clusterId, String moduleId, String objectId)
+ public AgeObject getObject(ModuleKey modk, String objectId)
  {
-  // TODO Auto-generated method stub
-  return null;
+  DataModuleWritable dm = getDataModule(modk);
+  
+  if( dm == null )
+   return null;
+   
+  return dm.getObject(objectId);
  }
 
- @Override
- public boolean hasDataModule(String clstId, String id)
- {
-  // TODO Auto-generated method stub
-  return false;
- }
 
  @Override
  public boolean hasDataModule(ModuleKey mk)
  {
-  // TODO Auto-generated method stub
-  return false;
+  return moduleSet.containsKey(mk);
  }
 
  @Override
@@ -238,22 +243,34 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  @Override
  public AgeObjectWritable getGlobalObject(String objID)
  {
-  // TODO Auto-generated method stub
-  return null;
+  ModuleKey modK = globalObjectMap.get(objID);
+  
+  if( modK == null )
+   return null;
+  
+  DataModuleWritable dm = getDataModule(modK);
+  
+  return dm.getObject(objID);
  }
 
  @Override
  public AgeObjectWritable getClusterObject(String clustId, String objID)
  {
-  // TODO Auto-generated method stub
-  return null;
+  ModuleKey modK = new ModuleKey(clustId,objID);
+  modK = clusterObjectMap.get(modK);
+  
+  if( modK == null )
+   return null;
+  
+  DataModuleWritable dm = getDataModule(modK);
+  
+  return dm.getObject(objID);
  }
 
  @Override
- public Collection< ? extends AgeObjectWritable> getAllObjects()
+ public Iterable<AgeObjectWritable> getAllObjects()
  {
-  // TODO Auto-generated method stub
-  return null;
+  return new QueryProcessor(null);
  }
 
  @Override
@@ -283,8 +300,24 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  @Override
  public DataModuleWritable getDataModule(ModuleKey modk )
  {
-  // TODO Auto-generated method stub
-  return null;
+  DataModuleWritable dm = moduleCache.get(modk);
+  
+  if( dm == null )
+  {
+   try
+   {
+    dm = loadDataModule(modk);
+   }
+   catch(ModuleStoreException e)
+   {
+    e.printStackTrace();
+    return null;
+   }
+   
+   moduleCache.put(dm.getModuleKey(), dm);
+  }
+  
+  return dm;
  }
 
  
@@ -471,5 +504,197 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
    return leaveMMode();
  }
 
+ private String getDataModuleFileName( ModuleKey sm )
+ {
+  return sm.getClusterId().length()+sm.getClusterId()+sm.getModuleId();
+ }
+ 
+ private void saveDataModule(DataModuleWritable sm) throws ModuleStoreException
+ {
+  File modFile = dataDepot.getFilePath( getDataModuleFileName(sm.getModuleKey()) );
+  
+  try
+  {
+   submRW.write(sm, modFile);
+  }
+  catch(Exception e)
+  {
+   modFile.delete();
+   
+   throw new ModuleStoreException("Can't store data module: "+e.getMessage(), e);
+  }
+ }
+ 
+ private DataModuleWritable loadDataModule(ModuleKey mk) throws ModuleStoreException
+ {
+  File modFile = dataDepot.getFilePath( getDataModuleFileName(mk) );
+  
+  try
+  {
+   return submRW.read(modFile);
+  }
+  catch(Exception e)
+  {
+   throw new ModuleStoreException("Can't load data module: "+e.getMessage(), e);
+  }
+ }
+ 
+ class QueryProcessorIterator implements Iterator<AgeObjectWritable>
+ {
+  private final AgeQuery query;
+  
+  private final Iterator<DataModuleWritable> modIter;
+  private Iterator<AgeObjectWritable> objIter;
+  
+  private AgeObjectWritable nextObject;
 
+  public QueryProcessorIterator(AgeQuery query)
+  {
+   modIter = new ModuleIterator();
+   this.query = query;
+  }
+
+  @Override
+  public boolean hasNext()
+  {
+   if( nextObject != null )
+    return true;
+   
+   while( true )
+   {
+    if(objIter == null || !objIter.hasNext())
+    {
+     do
+     {
+      if(!modIter.hasNext())
+      {
+       nextObject = null;
+       return false;
+      }
+      
+      objIter = modIter.next().getObjects().iterator();
+
+     } while(!objIter.hasNext());
+    }
+    
+    nextObject = objIter.next();
+    
+    if( query == null || query.getExpression().test(nextObject) )
+     return true;
+   }
+   
+  }
+
+  @Override
+  public AgeObjectWritable next()
+  {
+   if( objIter == null && ! hasNext() )
+    throw new NoSuchElementException();
+   
+   AgeObjectWritable obj = nextObject;
+   nextObject = null;
+
+   return obj;
+  }
+
+  @Override
+  public void remove()
+  {
+   throw new UnsupportedOperationException();
+  }
+
+ }
+
+ 
+ class QueryProcessor implements Iterable<AgeObjectWritable>
+ {
+  private final AgeQuery query;
+  
+  public QueryProcessor(AgeQuery qury)
+  {
+   query = qury;
+  }
+  @Override
+  public Iterator<AgeObjectWritable> iterator()
+  {
+   return new QueryProcessorIterator(query);
+  }
+ }
+ 
+ class ModuleIterable implements Iterable<DataModuleWritable>
+ {
+  
+  public ModuleIterable()
+  {
+  }
+
+  @Override
+  public Iterator<DataModuleWritable> iterator()
+  {
+   return new ModuleIterator();
+  }
+ }
+ 
+ class ModuleIterator implements Iterator<DataModuleWritable>
+ {
+  private final Set<ModuleKey> cachedSet = new HashSet<>();
+  
+  private Iterator<ModuleKey> modKeyIterator;
+  private Iterator<ModuleKey> modKeyCacheIterator = moduleCache.keySet().iterator();
+  private ModuleKey selKey;
+
+  @Override
+  public boolean hasNext()
+  {
+   if( selKey != null )
+    return true;
+   
+   
+   if( modKeyCacheIterator != null )
+   {
+    if( modKeyCacheIterator.hasNext() )
+    {
+     selKey = modKeyCacheIterator.next();
+
+     cachedSet.add(selKey);
+
+     return true;
+    }
+    else
+    {
+     modKeyCacheIterator = null;
+     modKeyIterator = moduleSet.keySet().iterator();
+    }
+   }
+
+   while( modKeyIterator.hasNext() )
+   {
+    selKey = modKeyIterator.next();
+    
+    if( ! cachedSet.contains(selKey) )
+     return true;
+   }
+   
+    return false;
+  }
+
+  @Override
+  public DataModuleWritable next()
+  {
+   if( selKey == null && ! hasNext() )
+    throw new NoSuchElementException();
+   
+   ModuleKey mk = selKey;
+   selKey = null;
+   
+   return getDataModule(mk);
+  }
+
+  @Override
+  public void remove()
+  {
+   throw new UnsupportedOperationException();
+  }
+  
+ }
 }
