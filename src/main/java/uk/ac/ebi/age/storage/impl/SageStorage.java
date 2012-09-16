@@ -1,11 +1,13 @@
 package uk.ac.ebi.age.storage.impl;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.Future;
@@ -33,11 +35,11 @@ import uk.ac.ebi.age.storage.exeption.AttachmentIOException;
 import uk.ac.ebi.age.storage.exeption.IndexIOException;
 import uk.ac.ebi.age.storage.exeption.ModuleStoreException;
 import uk.ac.ebi.age.storage.impl.ser.SerializedStorageConfiguration;
-import uk.ac.ebi.age.storage.index.AttachedSortedTextIndex;
-import uk.ac.ebi.age.storage.index.AttachedTextIndex;
+import uk.ac.ebi.age.storage.index.AgeIndexWritable;
+import uk.ac.ebi.age.storage.index.AgeTextIndex;
 import uk.ac.ebi.age.storage.index.KeyExtractor;
 import uk.ac.ebi.age.storage.index.TextFieldExtractor;
-import uk.ac.ebi.age.storage.index.TextIndex;
+import uk.ac.ebi.age.util.FileUtil;
 import uk.ac.ebi.mg.executor.DefaultExecutorService;
 import uk.ac.ebi.mg.filedepot.FileDepot;
 
@@ -185,7 +187,7 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
  }
 
  @Override
- public AttachedTextIndex createAttachedTextIndex(String name, AgeQuery qury, Collection<TextFieldExtractor> cb) throws IndexIOException
+ public AgeTextIndex createAttachedTextIndex(String name, AgeQuery qury, Collection<TextFieldExtractor> cb) throws IndexIOException
  {
   // TODO Auto-generated method stub
   return null;
@@ -291,13 +293,6 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
 
 
  @Override
- public DataModuleWritable getDataModule(String clstId, String name)
- {
-  // TODO Auto-generated method stub
-  return null;
- }
-
- @Override
  public DataModuleWritable getDataModule(ModuleKey modk )
  {
   DataModuleWritable dm = moduleCache.get(modk);
@@ -322,44 +317,121 @@ public class SageStorage implements AgeStorageAdm, AgeResolver
 
  
  @Override
- public Collection< ? extends DataModuleWritable> getDataModules()
+ public Iterable< ? extends DataModuleWritable> getDataModules()
  {
-  // TODO Auto-generated method stub
-  return null;
+  return new ModuleIterable();
  }
 
  @Override
  public boolean deleteAttachment(String id, String clusterId, boolean global)
  {
-  // TODO Auto-generated method stub
-  return false;
+  if( global )
+   fileDepot.getFilePath(makeFileSysRef(id)).delete();
+  
+  File f = fileDepot.getFilePath(makeFileSysRef(id, clusterId));
+
+  return f.delete();
  }
 
  @Override
  public File storeAttachment(String id, String clusterId, boolean global, File aux) throws AttachmentIOException
  {
-  // TODO Auto-generated method stub
-  return null;
+  File fDest = fileDepot.getFilePath(makeFileSysRef(id, clusterId));
+  fDest.delete();
+  
+  try
+  {
+   FileUtil.linkOrCopyFile(aux, fDest);
+   
+   if( global )
+   {
+    File glbfDest = fileDepot.getFilePath(makeFileSysRef(id));
+    glbfDest.delete();
+    
+    FileUtil.linkOrCopyFile(aux, glbfDest);
+
+   }
+  }
+  catch(IOException e)
+  {
+   throw new AttachmentIOException("Store attachment error: "+e.getMessage(), e);
+  }
+  
+  return fDest;
  }
 
- @Override
- public void changeAttachmentScope(String id, String clusterId, boolean global) throws AttachmentIOException
- {
-  // TODO Auto-generated method stub
 
+ @Override
+ public void changeAttachmentScope( String id, String clusterId, boolean global ) throws AttachmentIOException
+ {
+  File globFile = fileDepot.getFilePath(makeFileSysRef(id));
+  
+  try
+  {
+   if(global)
+   {
+    File fSrc = fileDepot.getFilePath(makeFileSysRef(id, clusterId));
+    FileUtil.linkOrCopyFile(fSrc, globFile);
+   }
+   else
+    globFile.delete();
+  }
+  catch(IOException e)
+  {
+   throw new AttachmentIOException("Can't link file: "+e.getMessage(), e);
+  }
  }
 
  @Override
  public void invalidateIndices()
  {
-  // TODO Auto-generated method stub
-
+  lockWrite();
+  
+  try
+  {
+   for( AgeIndexWritable idx : indexMap.values() )
+    idx.setDirty(true);
+   
+   enterMMode( config.getAutoMModeTimeout() );
+  }
+  finally
+  {
+   unlockWrite();
+  }
  }
  
  private void rebuildDirtyIndices()
  {
-  // TODO Auto-generated method stub
+  ArrayList<AgeObject> res = new ArrayList<AgeObject>();
+  Collection<DataModuleWritable> mods = moduleMap.values();
+
+  long ts=0;
   
+  for( Map.Entry<String, AgeIndexWritable> idxEnt : indexMap.entrySet() )
+  {
+   AgeIndexWritable idx = idxEnt.getValue();
+   
+   if( ! idx.isDirty() )
+    continue;
+   
+   assert log.debug("Start rebuilding index: "+idxEnt.getKey()) && ( (ts=System.currentTimeMillis()) > 0 ) ;
+   
+   Iterable<AgeObject> trv = traverse(idx.getQuery(), mods);
+
+   res.clear();
+
+   for(AgeObject nd : trv)
+    res.add(nd);
+
+   assert log.debug("Traversing finished. Index: "+idxEnt.getKey()+" "+(System.currentTimeMillis()-ts)+"ms") && ( (ts=System.currentTimeMillis()) > 0 ) ;
+   
+   idx.index(res, false);
+  
+   assert log.debug("Indexing finished. Index: "+idxEnt.getKey()+" "+(System.currentTimeMillis()-ts)+"ms");
+ 
+   idx.setDirty( false );
+  }
+
  }
 
  private boolean enterMMode( long timeout )

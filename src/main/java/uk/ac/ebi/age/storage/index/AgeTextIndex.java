@@ -5,7 +5,7 @@ import java.util.List;
 
 import uk.ac.ebi.age.model.AgeObject;
 
-public interface AttachedTextIndex extends AgeAttachedIndex
+public interface AgeTextIndex
 {
  List<AgeObject> select(String query);
  Selection select(String lucQuery, int offset, int count, Collection<String> aggrs );

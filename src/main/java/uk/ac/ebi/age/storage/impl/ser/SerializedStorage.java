@@ -53,7 +53,7 @@ import uk.ac.ebi.age.storage.exeption.StorageInstantiationException;
 import uk.ac.ebi.age.storage.impl.SerializedDataModuleReaderWriter;
 import uk.ac.ebi.age.storage.index.AgeIndexWritable;
 import uk.ac.ebi.age.storage.index.AttachedSortedTextIndex;
-import uk.ac.ebi.age.storage.index.AttachedTextIndex;
+import uk.ac.ebi.age.storage.index.AgeTextIndex;
 import uk.ac.ebi.age.storage.index.IndexFactory;
 import uk.ac.ebi.age.storage.index.KeyExtractor;
 import uk.ac.ebi.age.storage.index.SortedTextIndexWritable;
@@ -272,7 +272,7 @@ public class SerializedStorage implements AgeStorageAdm
  }
  
  @Override
- public AttachedTextIndex createAttachedTextIndex(String name, AgeQuery qury, Collection<TextFieldExtractor> exts) throws IndexIOException
+ public AgeTextIndex createAttachedTextIndex(String name, AgeQuery qury, Collection<TextFieldExtractor> exts) throws IndexIOException
  {
   File dir = null;
     
@@ -302,7 +302,7 @@ public class SerializedStorage implements AgeStorageAdm
 
    indexMap.put(name, ti);
 
-   return (AttachedTextIndex)ti;
+   return (AgeTextIndex)ti;
   }
   finally
   {

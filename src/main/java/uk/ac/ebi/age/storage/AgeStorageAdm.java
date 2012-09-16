@@ -19,8 +19,8 @@ public interface AgeStorageAdm extends AgeStorage
  @Override
  public AgeObjectWritable getClusterObject(String clustId, String objID);
  
- @Override
- public Iterable<AgeObjectWritable> getAllObjects();
+// @Override
+// public Iterable<AgeObjectWritable> getAllObjects();
 
  
  void update(Collection<DataModuleWritable> modListToIns, Collection<ModuleKey> modListToDel, ConnectionInfo conninf) throws RelationResolveException, ModuleStoreException;
@@ -34,9 +34,8 @@ public interface AgeStorageAdm extends AgeStorage
  void lockWrite();
  void unlockWrite();
 
- DataModuleWritable getDataModule(String clstId, String name);
- @Override
- Collection<? extends DataModuleWritable> getDataModules();
+// @Override
+// Iterable<? extends DataModuleWritable> getDataModules();
 
  
  boolean deleteAttachment(String id, String clusterId, boolean global);

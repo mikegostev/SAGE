@@ -45,8 +45,15 @@
 
 	<target name="deps" description="download dependences jars" >
 
+		  <artifact:remoteRepository id="berkeleydb-je.repository"
+		                                url="http://download.oracle.com/maven/" />
+
 		<artifact:dependencies filesetId="dependency.fileset">
 
+		    <remoteRepository refid="berkeleydb-je.repository" />
+		    <dependency groupId="com.sleepycat"
+		                   artifactId="je"
+		                   version="3.3.75"/>
 
 		<dependency
 			groupId="commons-logging"

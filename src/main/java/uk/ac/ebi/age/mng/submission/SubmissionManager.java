@@ -32,6 +32,7 @@ import uk.ac.ebi.age.ext.submission.Status;
 import uk.ac.ebi.age.ext.submission.SubmissionDBException;
 import uk.ac.ebi.age.ext.submission.SubmissionMeta;
 import uk.ac.ebi.age.model.AgeAttribute;
+import uk.ac.ebi.age.model.AgeExternalObjectAttribute;
 import uk.ac.ebi.age.model.AgeObject;
 import uk.ac.ebi.age.model.AgeRelation;
 import uk.ac.ebi.age.model.AgeRelationClass;
@@ -63,6 +64,7 @@ import uk.ac.ebi.age.transaction.TransactionException;
 import uk.ac.ebi.age.validator.AgeSemanticValidator;
 import uk.ac.ebi.age.validator.impl.AgeSemanticValidatorImpl;
 
+import com.pri.util.Counter;
 import com.pri.util.Extractor;
 import com.pri.util.Pair;
 import com.pri.util.collection.CollectionMapCollection;
@@ -267,7 +269,7 @@ public class SubmissionManager
 
     ModuleAux modAux = (ModuleAux) dm.getAux();
 
-    DataModuleWritable exstMod = dm.getId() != null && sMeta.getStatus() == Status.UPDATE ? ageStorage.getDataModule(sMeta.getId(), dm.getId()) : null;
+    DataModuleWritable exstMod = dm.getId() != null && sMeta.getStatus() == Status.UPDATE ? ageStorage.getDataModule(new ModuleKey(sMeta.getId(), dm.getId()) ) : null;
 
     if(modAux.getStatus() == Status.UPDATEORNEW)
     {
@@ -391,7 +393,7 @@ public class SubmissionManager
     {
      ModMeta mm = new ModMeta();
      mm.meta = odm;
-     mm.origModule = ageStorage.getDataModule(clusterMeta.id, modID);
+     mm.origModule = ageStorage.getDataModule( new ModuleKey(clusterMeta.id, modID) );
 
      if(mm.origModule == null)
      {
@@ -1736,7 +1738,7 @@ public class SubmissionManager
     ModMeta mm = new ModMeta();
 
     mm.meta = dmm;
-    mm.origModule = ageStorage.getDataModule(sbmID, dmm.getId());
+    mm.origModule = ageStorage.getDataModule(new ModuleKey(sbmID, dmm.getId()));
 
     if(mm.origModule != null)
      cstMeta.mod4Del.put(dmm.getId(), mm);
@@ -2474,6 +2476,30 @@ public class SubmissionManager
  private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta, Collection<Pair<AgeExternalObjectAttributeWritable, AgeObject>> attrConn,
    LogNode logRoot)
  {
+  LogNode logRecon = logRoot.branch("Reconnecting external object attributes");
+
+  boolean res = true;
+  
+  for( ModMeta mm : new CollectionsUnion<ModMeta>(cstMeta.mod4Del.values(),cstMeta.mod4DataUpd.values()) )
+  {
+   for( Map.Entry<ModuleKey, Counter> extConn : mm.origModule.getObjectConnections().entrySet() )
+   {
+    DataModule extDM = ageStorage.getDataModule(extConn.getKey());
+    
+    if( extDM.getExternalObjectAttributes() == null )
+     continue;
+
+    for( AgeExternalObjectAttribute atb : extDM.getExternalObjectAttributes() )
+    {}
+   }
+  }
+  
+  return res;
+ }
+ 
+ private boolean reconnectExternalObjectAttributesX(ClustMeta cstMeta, Collection<Pair<AgeExternalObjectAttributeWritable, AgeObject>> attrConn,
+   LogNode logRoot)
+ {
 
   LogNode logRecon = logRoot.branch("Reconnecting external object attributes");
 
@@ -2822,7 +2848,7 @@ public class SubmissionManager
 
     String ref = extAttr.getTargetObjectId();
 
-    AgeObject tgObj = resolveTarget(extAttr, cstMeta);
+    AgeObjectWritable tgObj = resolveTarget(extAttr, cstMeta);
 
     if(tgObj == null)
     {
