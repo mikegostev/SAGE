@@ -46,6 +46,8 @@ public interface AgeStorageAdm extends AgeStorage
 
  boolean setMaintenanceMode( boolean mmode);
  boolean setMaintenanceMode( boolean mmode, long timeout );
+
+ public GlobalObjectConnection getGlobalObjectConnection(String id);
  
 
 }

@@ -64,7 +64,7 @@ public class AgeObjectMergedLinkProxy extends AgeObjectProxy
     
     rels.add(r);
    }
-   else if( wSbCl && r.getAgeElClass().isClassOrSubclass(cls) )
+   else if( wSbCl && r.getAgeElClass().isClassOrSubclassOf(cls) )
    {
     if( rels == null )
      rels = new ArrayList<AgeRelationWritable>();

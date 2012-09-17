@@ -32,7 +32,6 @@ import uk.ac.ebi.age.ext.submission.Status;
 import uk.ac.ebi.age.ext.submission.SubmissionDBException;
 import uk.ac.ebi.age.ext.submission.SubmissionMeta;
 import uk.ac.ebi.age.model.AgeAttribute;
-import uk.ac.ebi.age.model.AgeExternalObjectAttribute;
 import uk.ac.ebi.age.model.AgeObject;
 import uk.ac.ebi.age.model.AgeRelation;
 import uk.ac.ebi.age.model.AgeRelationClass;
@@ -58,13 +57,13 @@ import uk.ac.ebi.age.service.id.IdGenerator;
 import uk.ac.ebi.age.service.submission.SubmissionDB;
 import uk.ac.ebi.age.storage.AgeStorageAdm;
 import uk.ac.ebi.age.storage.ConnectionInfo;
+import uk.ac.ebi.age.storage.GlobalObjectConnection;
 import uk.ac.ebi.age.storage.exeption.AttachmentIOException;
 import uk.ac.ebi.age.transaction.Transaction;
 import uk.ac.ebi.age.transaction.TransactionException;
 import uk.ac.ebi.age.validator.AgeSemanticValidator;
 import uk.ac.ebi.age.validator.impl.AgeSemanticValidatorImpl;
 
-import com.pri.util.Counter;
 import com.pri.util.Extractor;
 import com.pri.util.Pair;
 import com.pri.util.collection.CollectionMapCollection;
@@ -123,6 +122,7 @@ public class SubmissionManager
   Map<String,ModMeta> mod4DataUpd = new HashMap<String, SubmissionManager.ModMeta>(); //Modules with data update
   Map<String,ModMeta> mod4Del = new HashMap<String, SubmissionManager.ModMeta>(); //Modules to be deleted
   Map<String,ModMeta> mod4Hld = new HashMap<String, SubmissionManager.ModMeta>(); //Modules to be retained (fully untouched, even meta)
+  Map<String,ModMeta> mod4DataHld = new HashMap<String, SubmissionManager.ModMeta>(); //Modules with data to be retained (mod4Hld+mod4MetaUpd)
 
   Map<String,FileAttachmentMeta> att4Ins = new HashMap<String, FileAttachmentMeta>(); //New files
   Map<String,FileMeta> att4Upd = new HashMap<String, FileMeta>(); //Files with content update
@@ -137,6 +137,7 @@ public class SubmissionManager
 
   Map<String, AgeObjectWritable>          clusterIdMap   = new HashMap<String, AgeObjectWritable>();
   Map<String, AgeObjectWritable>          newGlobalIdMap = new HashMap<String, AgeObjectWritable>();
+  Map<String, AgeObjectWritable>          obsoleteGlobalIdMap = new HashMap<String, AgeObjectWritable>();
 
   Map<AgeRelationClass, RelationClassRef> relRefMap      = new HashMap<AgeRelationClass, RelationClassRef>();
  }
@@ -321,6 +322,7 @@ public class SubmissionManager
      else
      {
       clusterMeta.mod4MetaUpd.put(mm.meta.getId(), mm);
+      clusterMeta.mod4DataHld.put(mm.meta.getId(), mm);
       clusterMeta.mod4Use.add(mm);
      }
     }
@@ -406,6 +408,7 @@ public class SubmissionManager
 
      clusterMeta.mod4Use.add(mm);
      clusterMeta.mod4Hld.put(modID, mm);
+     clusterMeta.mod4DataHld.put(modID, mm);
     }
 
    }
@@ -1973,28 +1976,6 @@ public class SubmissionManager
 
     String ref = exr.getTargetObjectId();
 
-    // if( !exr.getAgeElClass().getInverseRelationClass().isImplicit() &&
-    // exr.getSourceObject().getIdScope() == IdScope.MODULE )
-    // {
-    // extModRelRes = false;
-    // extRelModLog.log(Level.ERROR,
-    // "Object "+objId2Str(exr.getSourceObject())+" has external relation (Class: '"+exr+"') with explicit inverse relation class"
-    // " but object ID scope is MODULE"
-    // "Invalid external relation: '" + ref
-    // +
-    // "'. Target object is not found within the cluster and the source object has not global identifier "
-    // +
-    // "but relation class has explicit inverse class so inverse relation is impossible. Module: "
-    // + mm.aux.getOrder() + " Source object: '"
-    // + exr.getSourceObject().getId() + "' (Class: " +
-    // exr.getSourceObject().getAgeElClass() + ", Order: " +
-    // exr.getSourceObject().getOrder()
-    // + "). Relation class: " + exr.getAgeElClass() + " Order: " +
-    // exr.getOrder());
-    //
-    // continue;
-    // }
-
     AgeObjectWritable tgObj = resolveTarget(exr, cstMeta);
 
     // if there is no target object within the cluster let's try to find global
@@ -2029,7 +2010,10 @@ public class SubmissionManager
     if(tgObj == null)
     {
      extModRelRes = false;
-     extRelModLog.log(Level.ERROR, "Object " + objId2Str(exr.getSourceObject()) + " has external relation (Class: '" + exr.getAgeElClass()
+     
+     AgeObjectWritable srcObj = exr.getSourceObject();
+     
+     extRelModLog.log(Level.ERROR, "Object " + objId2Str(srcObj.getId(),srcObj.getModuleKey(),srcObj.getOrder()) + " has external relation (Class: '" + exr.getAgeElClass()
        + "' Position: " + exr.getOrder() + " ) that can't be resolved");
 
      continue;
@@ -2197,16 +2181,16 @@ public class SubmissionManager
 
     if(obj.getIdScope() == IdScope.GLOBAL)
     {
-     clashObj = ageStorage.getGlobalObject(obj.getId());
-
+     ModuleKey gmk = ageStorage.getGlobalObjectConnection(obj.getId()).getHostModuleKey();
+     
      // We try to find clashing object outside of our cluster as all clashes
      // within the cluster we detected earlier
-     if(clashObj != null && !clashObj.getModuleKey().getClusterId().equals(clusterMeta.id))
+     if(gmk != null && !gmk.getClusterId().equals(clusterMeta.id))
      {
       res = false;
 
       logUniq.log(Level.ERROR, "Object identifiers clash (ID='" + obj.getId() + "') whithin the global scope. The first object: " + objId2Str(obj)
-        + ". The second object: " + objId2Str(clashObj));
+        + ". The second object: " + objId2Str(obj.getId(), gmk, -1));
 
       continue;
      }
@@ -2461,19 +2445,33 @@ public class SubmissionManager
   return tgObj;
  }
 
- private String objId2Str(AgeObject obj)
+ private String objId2Str( AgeObject obj )
+ {
+  return objId2Str(obj.getId(), obj.getModuleKey(), obj.getOrder()); 
+ }
+
+ 
+ private String objId2Str(String objId, ModuleKey mk, int ord)
  {
   String modId = null;
 
-  if(obj.getModuleKey().getModuleId().charAt(0) == '\0')
-   modId = "Module order: " + (int) obj.getModuleKey().getModuleId().charAt(1);
+  if(mk.getModuleId().charAt(0) == '\0')
+   modId = "Module order: " + (int) mk.getModuleId().charAt(1);
   else
-   modId = "MID: '" + obj.getModuleKey().getModuleId() + '\'';
+   modId = "MID: '" + mk.getModuleId() + '\'';
 
-  return "CID: '" + obj.getModuleKey().getClusterId() + "' " + modId + " OID: '" + obj.getId() + "' Pos: " + obj.getOrder();
+  return "CID: '" + mk.getClusterId() + "' " + modId + " OID: '" + objId + "'" +(ord>=0?(" Pos: " + ord):"");
  }
 
- private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta, Collection<Pair<AgeExternalObjectAttributeWritable, AgeObject>> attrConn,
+ // New G->C
+ // Rem G
+ //  a) G unresErr
+ //  b) CC G->C
+ // Rem C
+ //  a) C unserErr
+ //  b) CC C->G
+ 
+ private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta, Collection<GlobalObjectConnection> attrReConn,
    LogNode logRoot)
  {
   LogNode logRecon = logRoot.branch("Reconnecting external object attributes");
@@ -2482,17 +2480,58 @@ public class SubmissionManager
   
   for( ModMeta mm : new CollectionsUnion<ModMeta>(cstMeta.mod4Del.values(),cstMeta.mod4DataUpd.values()) )
   {
-   for( Map.Entry<ModuleKey, Counter> extConn : mm.origModule.getObjectConnections().entrySet() )
+   
+   for( AgeObjectWritable obj : mm.origModule.getObjects() )
    {
-    DataModule extDM = ageStorage.getDataModule(extConn.getKey());
-    
-    if( extDM.getExternalObjectAttributes() == null )
-     continue;
+    //For every outgoing global object we check
+    //1)If there are incoming connection (refs by object attrs)
+    // a) if no replacement
+    //   aa) connection from within another cluster - error
+    //   ab) connection from within the same cluster and resolution GLOBAL - error
+    // b) replacement has incompatible class - error
+    // c) adding GlobalObjectConnection to attrReConn to reset obsolete cached connection
+    // d) connection from within the same cluster and resolution CASCADE_CLUSTER - try to re-resolve in cluster pool
+    if( obj.getIdScope() == IdScope.GLOBAL )
+    {
+     GlobalObjectConnection objConn = ageStorage.getGlobalObjectConnection( obj.getId() );
+     AgeObjectWritable newObj = cstMeta.newGlobalIdMap.get(obj.getId());
+     
+     if( newObj == null )
+      cstMeta.obsoleteGlobalIdMap.put(obj.getId(), obj);
+     
+     if( objConn.getIncomingConnections() != null && objConn.getIncomingConnections().size() > 0 )
+     {
+      
+      if( newObj != null )
+      {
+       if(!newObj.getAgeElClass().isClassOrSubclassOf(obj.getAgeElClass()))
+       {
+        res = false;
 
-    for( AgeExternalObjectAttribute atb : extDM.getExternalObjectAttributes() )
-    {}
+        logRecon.log(Level.ERROR, "Global object: " + objId2Str(obj) + " will be replaced with object of incompatible class: " + objId2Str(newObj));
+        
+        continue;
+       }
+       
+       attrReConn.add(objConn);
+      }
+      else
+      {
+       res = false;
+       logRecon.log(Level.ERROR, "Global object: " + objId2Str(obj) + " will be removed but it is a value for "
+         +objConn.getIncomingConnections().size()+" object attributes. Modules: "+ objConn.getIncomingConnections());
+       
+       continue;
+      }
+      
+     }
+    }
    }
+   
   }
+  
+  for( ModMeta mm : cstMeta.mod4DataHld.values() )
+  {}
   
   return res;
  }
@@ -2527,7 +2566,7 @@ public class SubmissionManager
 
       if(replObj != null)
       {
-       if(!replObj.getAgeElClass().isClassOrSubclass(extObjAttr.getAgeElClass().getTargetClass()))
+       if(!replObj.getAgeElClass().isClassOrSubclassOf(extObjAttr.getAgeElClass().getTargetClass()))
        {
         res = false;
 
@@ -2563,7 +2602,7 @@ public class SubmissionManager
       // )
       // replObj = cstMeta.newGlobalIdMap.get(extObjAttr.getTargetObjectId());
 
-      if(replObj != null && !replObj.getAgeElClass().isClassOrSubclass(extObjAttr.getAgeElClass().getTargetClass()))
+      if(replObj != null && !replObj.getAgeElClass().isClassOrSubclassOf(extObjAttr.getAgeElClass().getTargetClass()))
       {
        res = false;
 
@@ -2593,7 +2632,7 @@ public class SubmissionManager
      }
      else
      {
-      if(!replObj.getAgeElClass().isClassOrSubclass(extObjAttr.getAgeElClass().getTargetClass()))
+      if(!replObj.getAgeElClass().isClassOrSubclassOf(extObjAttr.getAgeElClass().getTargetClass()))
       {
        AgeObjectWritable ch = extObjAttr.getMasterObject();
 
@@ -2877,7 +2916,7 @@ public class SubmissionManager
     }
     else
     {
-     if(!tgObj.getAgeElClass().isClassOrSubclass(extAttr.getAgeElClass().getTargetClass()))
+     if(!tgObj.getAgeElClass().isClassOrSubclassOf(extAttr.getAgeElClass().getTargetClass()))
      {
       AgeObject obj = (AgeObject) atStk.get(0);
 
