@@ -2013,7 +2013,7 @@ public class SubmissionManager
      
      AgeObjectWritable srcObj = exr.getSourceObject();
      
-     extRelModLog.log(Level.ERROR, "Object " + objId2Str(srcObj.getId(),srcObj.getModuleKey(),srcObj.getOrder()) + " has external relation (Class: '" + exr.getAgeElClass()
+     extRelModLog.log(Level.ERROR, "Object " + objId2Str(srcObj) + " has external relation (Class: '" + exr.getAgeElClass()
        + "' Position: " + exr.getOrder() + " ) that can't be resolved");
 
      continue;
@@ -2447,11 +2447,11 @@ public class SubmissionManager
 
  private String objId2Str( AgeObject obj )
  {
-  return objId2Str(obj.getId(), obj.getModuleKey(), obj.getOrder()); 
+  return objId2Str(obj.getId(), obj.getModuleKey(), obj.getRow(), obj.getCol()); 
  }
 
  
- private String objId2Str(String objId, ModuleKey mk, int ord)
+ private String objId2Str(String objId, ModuleKey mk, int r, int c)
  {
   String modId = null;
 
@@ -2460,7 +2460,7 @@ public class SubmissionManager
   else
    modId = "MID: '" + mk.getModuleId() + '\'';
 
-  return "CID: '" + mk.getClusterId() + "' " + modId + " OID: '" + objId + "'" +(ord>=0?(" Pos: " + ord):"");
+  return "CID: '" + mk.getClusterId() + "' " + modId + " OID: '" + objId + "'" +(r>=0?(" Pos: " + r+":"+c):"");
  }
 
  // New G->C
@@ -2531,7 +2531,62 @@ public class SubmissionManager
   }
   
   for( ModMeta mm : cstMeta.mod4DataHld.values() )
-  {}
+  {
+   Collection<? extends AgeExternalObjectAttributeWritable> extAttrs = mm.origModule.getExternalObjectAttributes();
+   
+   if( extAttrs == null || extAttrs.size() == 0 )
+    continue;
+   
+   for( AgeExternalObjectAttributeWritable exta : extAttrs )
+   {
+    AgeObjectWritable tgtObj = null;
+    
+    // trying re-resolving cluster objattrs, some necessary object can go off
+    if( exta.getTargetResolveScope() == ResolveScope.CLUSTER )
+    { 
+     tgtObj = cstMeta.clusterIdMap.get(exta.getTargetObjectId());
+     
+     if( tgtObj == null )
+     {
+      res = false;
+      logRecon.log(Level.ERROR, "Can't resolve object attribute in cluster scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+      
+      continue;
+     }
+
+    }
+    else if( exta.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER || exta.getTargetResolveScope() == ResolveScope.CASCADE_MODULE )
+    {
+     tgtObj = cstMeta.clusterIdMap.get(exta.getTargetObjectId());
+     
+     if( tgtObj == null && ! cstMeta.obsoleteGlobalIdMap.containsKey(exta.getTargetObjectId()) )
+     {
+      tgtObj = ageStorage.getGlobalObject(exta.getTargetObjectId());
+
+      if( tgtObj == null)
+       tgtObj = cstMeta.newGlobalIdMap.get(exta.getTargetObjectId());
+      
+     }
+     
+     if( tgtObj == null )
+     {
+      res = false;
+      logRecon.log(Level.ERROR, "Can't resolve object attribute in cascading scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+      
+      continue;
+     }
+     
+     if( ! tgtObj.getAgeElClass().isClassOrSubclassOf(exta.getAgeElClass().getTargetClass()))
+     {
+      res = false;
+      logRecon.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+      
+      continue;
+     }
+    }
+   }
+   
+  }
   
   return res;
  }
