@@ -32,6 +32,7 @@ import uk.ac.ebi.age.ext.submission.Status;
 import uk.ac.ebi.age.ext.submission.SubmissionDBException;
 import uk.ac.ebi.age.ext.submission.SubmissionMeta;
 import uk.ac.ebi.age.model.AgeAttribute;
+import uk.ac.ebi.age.model.AgeClass;
 import uk.ac.ebi.age.model.AgeObject;
 import uk.ac.ebi.age.model.AgeRelation;
 import uk.ac.ebi.age.model.AgeRelationClass;
@@ -736,6 +737,8 @@ public class SubmissionManager
     res = false;
     return false;
    }
+
+   LogNode connLog = logRoot.branch("Connecting data module" + (clusterMeta.incomingMods.size() > 1 ? "s" : "") + " to the main graph");
 
    ConnectionInfo connectionInfo = new ConnectionInfo();
    
@@ -2190,7 +2193,7 @@ public class SubmissionManager
       res = false;
 
       logUniq.log(Level.ERROR, "Object identifiers clash (ID='" + obj.getId() + "') whithin the global scope. The first object: " + objId2Str(obj)
-        + ". The second object: " + objId2Str(obj.getId(), gmk, -1));
+        + ". The second object: " + objId2Str(obj.getId(), gmk, -1, -1));
 
       continue;
      }
@@ -2303,7 +2306,7 @@ public class SubmissionManager
   // As new IDs could appear within cluster scope we need to reconnect
   // CASCADE_CLUSTER relations
   // that point to the GLOBAL scope but can be resolved on the CLUSTER scope now
-  for(ModMeta mm : new CollectionsUnion<ModMeta>(cstMeta.mod4Hld.values(), cstMeta.mod4MetaUpd.values()))
+  for(ModMeta mm : cstMeta.mod4DataHld.values() )
   {
    Collection< ? extends AgeExternalRelationWritable> origExtRels = mm.origModule.getExternalRelations();
 
@@ -2470,9 +2473,16 @@ public class SubmissionManager
  // Rem C
  //  a) C unserErr
  //  b) CC C->G
- 
- private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta, Collection<GlobalObjectConnection> attrReConn,
-   LogNode logRoot)
+ //For every outgoing global object we check
+ //1)If there are incoming connection (refs by object attrs)
+ // a) if no replacement
+ //   aa) connection from within another cluster - error
+ //   ab) connection from within the same cluster and resolution GLOBAL - error
+ // b) replacement has incompatible class - error
+ // c) adding GlobalObjectConnection to attrReConn to reset obsolete cached connection
+ // d) connection from within the same cluster and resolution CASCADE_CLUSTER - try to re-resolve in cluster pool
+
+ private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta, Set<ModuleKey> mods2reset, Map<String,Set<DataModule>> disconMap,  LogNode logRoot)
  {
   LogNode logRecon = logRoot.branch("Reconnecting external object attributes");
 
@@ -2483,51 +2493,75 @@ public class SubmissionManager
    
    for( AgeObjectWritable obj : mm.origModule.getObjects() )
    {
-    //For every outgoing global object we check
-    //1)If there are incoming connection (refs by object attrs)
-    // a) if no replacement
-    //   aa) connection from within another cluster - error
-    //   ab) connection from within the same cluster and resolution GLOBAL - error
-    // b) replacement has incompatible class - error
-    // c) adding GlobalObjectConnection to attrReConn to reset obsolete cached connection
-    // d) connection from within the same cluster and resolution CASCADE_CLUSTER - try to re-resolve in cluster pool
     if( obj.getIdScope() == IdScope.GLOBAL )
     {
-     GlobalObjectConnection objConn = ageStorage.getGlobalObjectConnection( obj.getId() );
+     GlobalObjectConnection objConn = ageStorage.getGlobalObjectConnection(obj.getId());
      AgeObjectWritable newObj = cstMeta.newGlobalIdMap.get(obj.getId());
-     
-     if( newObj == null )
+
+     if(newObj == null)
       cstMeta.obsoleteGlobalIdMap.put(obj.getId(), obj);
-     
-     if( objConn.getIncomingConnections() != null && objConn.getIncomingConnections().size() > 0 )
+
+     boolean hasExternal = false;
+     if(objConn.getIncomingConnections() != null && objConn.getIncomingConnections().size() > 0)
+      hasExternal = true;
+
+     // We will treat connections to global object coming from the same cluster differently.
+     // They can go away with modules or can be down graded to cluster scope
+     // for(ModuleKey cmk : objConn.getIncomingConnections().keySet())
+     // if(cmk.getClusterId().endsWith(cstMeta.id))
+     // {
+     // hasExternal = true;
+     // break;
+     // }
+
+     if(hasExternal)
      {
-      
-      if( newObj != null )
+
+      if(newObj != null)
       {
        if(!newObj.getAgeElClass().isClassOrSubclassOf(obj.getAgeElClass()))
        {
         res = false;
 
         logRecon.log(Level.ERROR, "Global object: " + objId2Str(obj) + " will be replaced with object of incompatible class: " + objId2Str(newObj));
-        
+
         continue;
        }
-       
-       attrReConn.add(objConn);
+
+       mods2reset.addAll(objConn.getIncomingConnections().keySet());
       }
       else
       {
        res = false;
        logRecon.log(Level.ERROR, "Global object: " + objId2Str(obj) + " will be removed but it is a value for "
-         +objConn.getIncomingConnections().size()+" object attributes. Modules: "+ objConn.getIncomingConnections());
-       
+         + objConn.getIncomingConnections().size() + " object attributes. Modules: " + objConn.getIncomingConnections());
+
        continue;
       }
-      
      }
     }
    }
    
+   //We have to disconnect global connections
+   if( mm.origModule.getExternalObjectAttributes() != null )
+   {
+    for( AgeExternalObjectAttributeWritable exta : mm.origModule.getExternalObjectAttributes() )
+    {
+     String tgtId = exta.getTargetObjectId();
+     
+     if( (exta.getTargetResolveScope() == ResolveScope.GLOBAL || ageStorage.getClusterObject(cstMeta.id, tgtId ) == null) 
+         && ! cstMeta.obsoleteGlobalIdMap.containsKey(tgtId) )
+     {
+      Set<DataModule> globset = disconMap.get(tgtId);
+      
+      if( globset == null )
+       disconMap.put(tgtId,globset=new HashSet<DataModule>());
+      
+      globset.add(mm.origModule);
+     }
+    }
+    
+   }
   }
   
   for( ModMeta mm : cstMeta.mod4DataHld.values() )
@@ -2539,51 +2573,58 @@ public class SubmissionManager
    
    for( AgeExternalObjectAttributeWritable exta : extAttrs )
    {
+    AgeClass tgtObjClass = null;
+
     AgeObjectWritable tgtObj = null;
     
-    // trying re-resolving cluster objattrs, some necessary object can go off
-    if( exta.getTargetResolveScope() == ResolveScope.CLUSTER )
-    { 
+    // trying re-resolving objattrs, some necessary object can go off
+    
+    if( exta.getTargetResolveScope() != ResolveScope.GLOBAL ) // CLUSTER, CASCADE_MODULE or CASCADE_CLUSTER
+    {
      tgtObj = cstMeta.clusterIdMap.get(exta.getTargetObjectId());
      
-     if( tgtObj == null )
+     if( tgtObj != null )
+      tgtObjClass = tgtObj.getAgeElClass();
+    }
+    
+    if(  tgtObjClass == null )
+    {
+     if( exta.getTargetResolveScope() == ResolveScope.CLUSTER )
      {
       res = false;
       logRecon.log(Level.ERROR, "Can't resolve object attribute in cluster scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
       
       continue;
      }
-
+     
+     // GLOBAL, CASCADE_MODULE or CASCADE_CLUSTER in global scope
+     if( ! cstMeta.obsoleteGlobalIdMap.containsKey(exta.getTargetObjectId()) )
+     {
+      GlobalObjectConnection gcon = ageStorage.getGlobalObjectConnection(exta.getTargetObjectId());
+      
+      if( gcon != null )
+       tgtObjClass = ageStorage.getSemanticModel().getDefinedAgeClass(gcon.getClassName());
+     }
     }
-    else if( exta.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER || exta.getTargetResolveScope() == ResolveScope.CASCADE_MODULE )
+    
+    if( tgtObjClass == null )
     {
-     tgtObj = cstMeta.clusterIdMap.get(exta.getTargetObjectId());
+     res = false;
+     logRecon.log(Level.ERROR, "Can't resolve object attribute in global scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
      
-     if( tgtObj == null && ! cstMeta.obsoleteGlobalIdMap.containsKey(exta.getTargetObjectId()) )
-     {
-      tgtObj = ageStorage.getGlobalObject(exta.getTargetObjectId());
-
-      if( tgtObj == null)
-       tgtObj = cstMeta.newGlobalIdMap.get(exta.getTargetObjectId());
-      
-     }
-     
-     if( tgtObj == null )
-     {
-      res = false;
-      logRecon.log(Level.ERROR, "Can't resolve object attribute in cascading scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
-      
-      continue;
-     }
-     
-     if( ! tgtObj.getAgeElClass().isClassOrSubclassOf(exta.getAgeElClass().getTargetClass()))
-     {
-      res = false;
-      logRecon.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
-      
-      continue;
-     }
+     continue;
     }
+
+    if( ! tgtObjClass.isClassOrSubclassOf( exta.getAgeElClass().getTargetClass() ) )
+    {
+     res = false;
+     logRecon.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+     
+     continue;
+    }
+    
+    mods2reset.add(mm.origModule.getModuleKey());
+    
    }
    
   }
@@ -2874,10 +2915,99 @@ public class SubmissionManager
   return res;
  }
 
- private boolean connectNewObjectAttributes(ClustMeta cstMeta, LogNode logRoot)
+ private boolean connectNewObjectAttributes(ClustMeta cstMeta, Map<String, Set<DataModule>> globAtt, LogNode logRoot)
+ {
+  LogNode extAttrLog = logRoot.branch("Connecting external object attributes");
+  boolean extAttrRes = true;
+
+  for(ModMeta mm : cstMeta.incomingMods)
+  {
+   if(mm.newModule == null)
+    continue;
+
+   boolean mdres = true;
+   
+   LogNode extAttrModLog = extAttrLog.branch("Processing module: " + mm.aux.getOrder());
+
+   for(AgeExternalObjectAttributeWritable exta : mm.newModule.getExternalObjectAttributes() )
+   {
+    if(exta.getTargetResolveScope() != ResolveScope.GLOBAL)
+    {
+     if(cstMeta.clusterIdMap.containsKey(exta.getTargetObjectId()))
+      continue;
+
+     if(exta.getTargetResolveScope() == ResolveScope.CLUSTER)
+     {
+      mdres = false;
+      extAttrModLog.log(Level.ERROR, "Can't resolve object attribute in global scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "
+        + exta.getClassReference().getHeading());
+
+      continue;
+     }
+    }
+
+    boolean globOk=false;
+    
+    if(  cstMeta.newGlobalIdMap.containsKey(exta.getTargetObjectId()) ) // no more actions needed
+     globOk = true;
+    
+    else if( ! cstMeta.obsoleteGlobalIdMap.containsKey(exta.getTargetObjectId()) ) // if obsoleteGlobalIdMap contains targetId then resolution will fail
+    {
+     GlobalObjectConnection gcon = ageStorage.getGlobalObjectConnection(exta.getTargetObjectId());
+     
+     if( gcon != null )
+     {
+      AgeClass tgCls = ageStorage.getSemanticModel().getDefinedAgeClass(gcon.getClassName());
+      
+      if( ! tgCls.isClassOrSubclassOf(exta.getAgeElClass().getTargetClass()) )
+      {
+       mdres = false;
+       extAttrModLog.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+       continue;
+      }
+      
+      globOk = true;
+      
+      if( ! gcon.getHostModuleKey().getClusterId().equals(cstMeta.id))
+      {
+       Set<DataModule> attMods = globAtt.get(exta.getTargetObjectId());
+       
+       if( attMods == null )
+        globAtt.put(exta.getTargetObjectId(), attMods = new HashSet<DataModule>() );
+       
+       attMods.add(mm.newModule);
+      }
+     }
+    }
+    
+    if( ! globOk )
+    {
+     mdres = false;
+     if( exta.getTargetResolveScope() == ResolveScope.GLOBAL )
+      extAttrModLog.log(Level.ERROR, "Can't resolve object attribute in global scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "
+       + exta.getClassReference().getHeading());
+     else
+      extAttrModLog.log(Level.ERROR, "Can't resolve object attribute in cascade scope: " + objId2Str(exta.getMasterObject()) + " Attribute: "
+        + exta.getClassReference().getHeading());
+    }
+    
+    if( mdres )
+     extAttrModLog.success();
+    
+    extAttrRes = extAttrRes && mdres;
+   }
+
+  }
+  
+  if( extAttrRes )
+   extAttrLog.success();
+  
+  return extAttrRes;
+ }
+ 
+ private boolean connectNewObjectAttributesX(ClustMeta cstMeta, LogNode logRoot)
  {
 
-  LogNode connLog = logRoot.branch("Connecting data module" + (cstMeta.incomingMods.size() > 1 ? "s" : "") + " to the main graph");
 
   LogNode extAttrLog = connLog.branch("Connecting external object attributes");
   boolean extAttrRes = true;

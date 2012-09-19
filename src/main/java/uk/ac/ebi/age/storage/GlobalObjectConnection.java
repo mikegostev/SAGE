@@ -11,6 +11,12 @@ public class GlobalObjectConnection
 
  private ModuleKey               hostModuleKey;
  private Map<ModuleKey, Counter> incomingConnections;
+ private String className;
+
+ public void setClassName(String className)
+ {
+  this.className = className;
+ }
 
  public ModuleKey getHostModuleKey()
  {
@@ -31,5 +37,12 @@ public class GlobalObjectConnection
  {
   this.incomingConnections = incomingConnections;
  }
+
+ public String getClassName()
+ {
+  return className;
+ }
+ 
+ 
 
 }
