@@ -14,7 +14,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.Stack;
 
 import uk.ac.ebi.age.annotation.AnnotationManager;
 import uk.ac.ebi.age.annotation.Topic;
@@ -31,13 +30,11 @@ import uk.ac.ebi.age.ext.submission.FileAttachmentMeta;
 import uk.ac.ebi.age.ext.submission.Status;
 import uk.ac.ebi.age.ext.submission.SubmissionDBException;
 import uk.ac.ebi.age.ext.submission.SubmissionMeta;
-import uk.ac.ebi.age.model.AgeAttribute;
 import uk.ac.ebi.age.model.AgeClass;
 import uk.ac.ebi.age.model.AgeObject;
 import uk.ac.ebi.age.model.AgeRelation;
 import uk.ac.ebi.age.model.AgeRelationClass;
 import uk.ac.ebi.age.model.AttributeClassRef;
-import uk.ac.ebi.age.model.Attributed;
 import uk.ac.ebi.age.model.DataModule;
 import uk.ac.ebi.age.model.IdScope;
 import uk.ac.ebi.age.model.ModuleKey;
@@ -2315,17 +2312,20 @@ public class SubmissionManager
 
    for(AgeExternalRelationWritable extRel : origExtRels)
    {
-    AgeExternalRelationWritable invrsRel = extRel.getInverseRelation();
-    AgeObjectWritable oldTarget = extRel.getTargetObject(); // external object
-    AgeObjectWritable relSource = extRel.getSourceObject();
-
-    if(extRel.isInferred() || extRel.getTargetResolveScope() != ResolveScope.CASCADE_CLUSTER || oldTarget.getModuleKey().getClusterId().equals(cstMeta.id))
+    if( extRel.isInferred() || ( extRel.getTargetResolveScope() != ResolveScope.CASCADE_CLUSTER && extRel.getTargetResolveScope() != ResolveScope.CASCADE_MODULE ) )
      continue;
 
     AgeObjectWritable newTarget = cstMeta.clusterIdMap.get(extRel.getTargetObjectId()); // newTarget can only be of the new objects
 
     if(newTarget != null)
     {
+     AgeExternalRelationWritable invrsRel = extRel.getInverseRelation();
+     AgeObjectWritable oldTarget = extRel.getTargetObject(); // external object
+     AgeObjectWritable relSource = extRel.getSourceObject();
+     
+     if( newTarget == oldTarget || oldTarget.getModuleKey().getClusterId().equals(cstMeta.id) )
+      continue;
+
      if(invrsRel.isInferred())
      {
       Set<AgeRelationWritable> detSet = detachedRelMap.get(oldTarget);
@@ -2366,7 +2366,7 @@ public class SubmissionManager
       }
 
       newInvRel = newTarget.getDataModule().getContextSemanticModel()
-        .createExternalRelation(invCRef, newTarget, relSource.getId(), ResolveScope.CASCADE_CLUSTER);
+        .createExternalRelation(invCRef, newTarget, relSource.getId(), ResolveScope.CLUSTER);
 
       newInvRel.setInferred(true);
       newInvRel.setTargetObject(relSource);
@@ -2632,126 +2632,6 @@ public class SubmissionManager
   return res;
  }
  
- private boolean reconnectExternalObjectAttributesX(ClustMeta cstMeta, Collection<Pair<AgeExternalObjectAttributeWritable, AgeObject>> attrConn,
-   LogNode logRoot)
- {
-
-  LogNode logRecon = logRoot.branch("Reconnecting external object attributes");
-
-  boolean res = true;
-
-  for(DataModule extDM : ageStorage.getDataModules())
-  {
-   if( extDM.getExternalObjectAttributes() == null )
-    continue;
-   
-   if( extDM.getClusterId().equals(cstMeta.id) )
-   {
-    if(cstMeta.mod4Del.containsKey(extDM.getId()) || cstMeta.mod4DataUpd.containsKey(extDM.getId()))
-     continue;
-
-    // CASCADE_CLUSTER ext obj attributes of the same cluster may need reconnection if they were connected globally but now we have appropriate object within this cluster
-
-    for(Attributed atb : extDM.getExternalObjectAttributes())
-    {
-     AgeExternalObjectAttributeWritable extObjAttr = (AgeExternalObjectAttributeWritable) atb;
-
-     if(extObjAttr.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER && !extObjAttr.getValue().getModuleKey().getClusterId().equals(cstMeta.id))
-     {
-      AgeObject replObj = cstMeta.clusterIdMap.get(extObjAttr.getTargetObjectId());
-
-      if(replObj != null)
-      {
-       if(!replObj.getAgeElClass().isClassOrSubclassOf(extObjAttr.getAgeElClass().getTargetClass()))
-       {
-        res = false;
-
-        logRecon.log(Level.ERROR, "Object attribute (Class: '" + extObjAttr.getClass() + "') of object " + objId2Str(extObjAttr.getMasterObject())
-          + " should be reconnected to object " + objId2Str(replObj) + " that doesn't match target class");
-       }
-       else
-        attrConn.add(new Pair<AgeExternalObjectAttributeWritable, AgeObject>(extObjAttr, replObj));
-      }
-     }
-    }
-   }
-
-   for(Attributed atb : extDM.getExternalObjectAttributes())
-   {
-    AgeExternalObjectAttributeWritable extObjAttr = (AgeExternalObjectAttributeWritable) atb;
-    ModuleKey refModId = extObjAttr.getValue().getModuleKey();
-
-    if(refModId.getClusterId().equals(cstMeta.id) && (cstMeta.mod4Del.containsKey(refModId) || cstMeta.mod4DataUpd.containsKey(refModId)))
-    {
-     AgeObject replObj = null;
-
-     if(extObjAttr.getTargetResolveScope() == ResolveScope.GLOBAL || !extDM.getClusterId().equals(cstMeta.id))
-      replObj = cstMeta.newGlobalIdMap.get(extObjAttr.getTargetObjectId());
-     else
-     {
-      replObj = cstMeta.clusterIdMap.get(extObjAttr.getTargetObjectId());
-
-      // if( replObj != null && extObjAttr.getTargetResolveScope() ==
-      // ResolveScope.CASCADE_CLUSTER
-      // && !
-      // replObj.getAgeElClass().isClassOrSubclass(extObjAttr.getAgeElClass().getTargetClass())
-      // )
-      // replObj = cstMeta.newGlobalIdMap.get(extObjAttr.getTargetObjectId());
-
-      if(replObj != null && !replObj.getAgeElClass().isClassOrSubclassOf(extObjAttr.getAgeElClass().getTargetClass()))
-      {
-       res = false;
-
-       logRecon.log(Level.ERROR, "Object attribute (Class: '" + extObjAttr.getClass() + "') of object " + objId2Str(extObjAttr.getMasterObject())
-         + " should be reconnected to object " + objId2Str(replObj) + " that doesn't match target class");
-      }
-
-     }
-
-     if(replObj == null)
-     {
-      ModMeta errMod = null;
-
-      if((errMod = cstMeta.mod4Del.get(refModId)) != null)
-       logRecon.log(Level.ERROR, "Module " + errMod.aux.getOrder() + " (ID='" + errMod.meta.getId() + "') is marked for deletion but object (ID='"
-         + extObjAttr.getValue().getId() + "') is referred by object attribute (Class='" + extObjAttr.getAgeElClass().getName() + "') of object "
-         + objId2Str(extObjAttr.getMasterObject()));
-      else
-      {
-       errMod = cstMeta.mod4DataUpd.get(refModId);
-       logRecon.log(Level.ERROR, "Module " + errMod.aux.getOrder() + " (ID='" + errMod.meta.getId() + "') is marked for update but object (ID='"
-         + extObjAttr.getValue().getId() + "') is referred by object attribute (Class='" + extObjAttr.getAgeElClass().getName() + "') of object "
-         + objId2Str(extObjAttr.getMasterObject()) + " and reference can't be resolved anymore");
-      }
-
-      res = false;
-     }
-     else
-     {
-      if(!replObj.getAgeElClass().isClassOrSubclassOf(extObjAttr.getAgeElClass().getTargetClass()))
-      {
-       AgeObjectWritable ch = extObjAttr.getMasterObject();
-
-       String hostId = ch != null ? ch.getId() : "???";
-
-       logRecon.log(Level.ERROR, "Object attribute (Class='" + extObjAttr.getAgeElClass().getName() + "') of object (ID='" + hostId + "') from module '"
-         + extDM.getId() + "' of cluster '" + extDM.getClusterId() + "' can be connected but target object has wrong class ");
-
-       res = false;
-      }
-      else
-       attrConn.add(new Pair<AgeExternalObjectAttributeWritable, AgeObject>(extObjAttr, replObj));
-     }
-    }
-   }
-  }
-
-  if(res)
-   logRecon.success();
-
-  return res;
- }
-
 
  @SuppressWarnings("unchecked")
  private boolean resolveIncomingFileAttributes(ClustMeta cMeta, LogNode logRoot)
@@ -3005,134 +2885,6 @@ public class SubmissionManager
   return extAttrRes;
  }
  
- private boolean connectNewObjectAttributesX(ClustMeta cstMeta, LogNode logRoot)
- {
-
-
-  LogNode extAttrLog = connLog.branch("Connecting external object attributes");
-  boolean extAttrRes = true;
-
-  Stack<Attributed> attrStk = new Stack<Attributed>();
-
-  for(ModMeta mm : cstMeta.incomingMods)
-  {
-   if(mm.newModule == null)
-    continue;
-
-   boolean mdres = true;
-
-   LogNode extAttrModLog = extAttrLog.branch("Processing module: " + mm.aux.getOrder());
-
-   for(AgeObjectWritable obj : mm.newModule.getObjects())
-   {
-    attrStk.clear();
-    attrStk.push(obj);
-
-    mdres = connectExternalAttrs(attrStk, ageStorage, cstMeta, mm, extAttrModLog);
-
-    if(obj.getRelations() != null)
-    {
-     for(AgeRelationWritable rl : obj.getRelations())
-     {
-      attrStk.clear();
-      attrStk.push(rl);
-
-      mdres = mdres && connectExternalAttrs(attrStk, ageStorage, cstMeta, mm, extAttrModLog);
-     }
-    }
-
-    extAttrRes = extAttrRes && mdres;
-   }
-
-   if(mdres)
-    extAttrModLog.success();
-
-  }
-
-  if(extAttrRes)
-   extAttrLog.success();
-
-  return extAttrRes;
- }
-
- private boolean connectExternalAttrs(Stack<Attributed> atStk, AgeStorageAdm stor, ClustMeta cstMeta, ModMeta cmod, LogNode log)
- {
-  boolean res = true;
-
-  Attributed atInst = atStk.peek();
-
-  if(atInst.getAttributes().isEmpty())
-   return true;
-
-  for(AgeAttribute attr : atInst.getAttributes())
-  {
-   if(attr instanceof AgeExternalObjectAttributeWritable)
-   {
-    AgeExternalObjectAttributeWritable extAttr = (AgeExternalObjectAttributeWritable) attr;
-
-    String ref = extAttr.getTargetObjectId();
-
-    AgeObjectWritable tgObj = resolveTarget(extAttr, cstMeta);
-
-    if(tgObj == null)
-    {
-     AgeObject obj = (AgeObject) atStk.get(0);
-
-     String attrName = attr.getAgeElClass().getName();
-
-     if(atStk.size() > 1)
-     {
-      StringBuilder sb = new StringBuilder(200);
-
-      sb.append(atStk.get(1).getAttributedClass().getName());
-
-      for(int i = 2; i < atStk.size(); i++)
-       sb.append("[").append(atStk.get(i).getAttributedClass().getName()).append("]");
-
-      sb.append("[").append(attr.getAgeElClass().getName()).append("]");
-
-      attrName = sb.toString();
-     }
-
-     log.log(Level.ERROR,
-       "Invalid external reference: '" + ref + "'. Target object not found. Source object: '" + obj.getId() + "' (Class: " + obj.getAgeElClass()
-         + ", Order: " + obj.getOrder() + "). Attribute: " + attrName + " Order: " + attr.getOrder());
-     res = false;
-    }
-    else
-    {
-     if(!tgObj.getAgeElClass().isClassOrSubclassOf(extAttr.getAgeElClass().getTargetClass()))
-     {
-      AgeObject obj = (AgeObject) atStk.get(0);
-
-      String attrName = attr.getAgeElClass().getName();
-      if(atStk.size() > 1)
-      {
-       attrName = atStk.get(1).getAttributedClass().getName();
-       for(int i = 2; i < atStk.size(); i++)
-        attrName += "[" + atStk.get(i).getAttributedClass().getName() + "]";
-
-       attrName += "[" + attr.getAgeElClass().getName() + "]";
-      }
-
-      log.log(Level.ERROR, "Inappropriate target object's (Id: '" + ref + "') class: " + tgObj.getAgeElClass() + ". Expected class: "
-        + extAttr.getAgeElClass().getTargetClass() + " Source object: '" + obj.getId() + "' (Class: " + obj.getAgeElClass() + ", Order: " + obj.getOrder()
-        + "). Attribute: " + attrName + " Order: " + attr.getOrder());
-      res = false;
-     }
-     else
-      extAttr.setTargetObject(tgObj);
-    }
-
-   }
-
-   atStk.push(attr);
-   res = res && connectExternalAttrs(atStk, stor, cstMeta, cmod, log);
-   atStk.pop();
-  }
-
-  return res;
- }
 
  public AgeTabSyntaxParser getAgeTabParser()
  {
