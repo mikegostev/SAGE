@@ -1978,35 +1978,6 @@ public class SubmissionManager
 
     AgeObjectWritable tgObj = resolveTarget(exr, cstMeta);
 
-    // if there is no target object within the cluster let's try to find global
-    // object but we have to keep in mind inverse relation!
-    if(tgObj == null)
-    {
-     // if( !exr.getAgeElClass().getInverseRelationClass().isImplicit() &&
-     // exr.getSourceObject().getIdScope() != IdScope.GLOBAL )
-     // {
-     // extModRelRes = false;
-     // extRelModLog.log(Level.ERROR, "Invalid external relation: '" + ref
-     // +
-     // "'. Target object found is not found within the cluster and the source object has not global identifier "
-     // +
-     // "but relation class has explicit inverse class so inverse relation is impossible. Module: "
-     // + mm.aux.getOrder() + " Source object: '"
-     // + exr.getSourceObject().getId() + "' (Class: " +
-     // exr.getSourceObject().getAgeElClass() + ", Order: " +
-     // exr.getSourceObject().getOrder()
-     // + "). Relation class: " + exr.getAgeElClass() + " Order: " +
-     // exr.getOrder());
-     //
-     // continue;
-     // }
-
-     tgObj = ageStorage.getGlobalObject(ref);
-
-     if(tgObj == null || cstMeta.mod4Del.containsKey(tgObj.getDataModule().getId()) || cstMeta.mod4DataUpd.containsKey(tgObj.getDataModule().getId()))
-      tgObj = null;
-    }
-
     if(tgObj == null)
     {
      extModRelRes = false;
@@ -2405,10 +2376,10 @@ public class SubmissionManager
       && extRel.getTargetObjectId().equals(replObj.getId())
       && cndtRel.getAgeElClass().equals(invClass)
       && cndtRel.getTargetObjectId().equals(extRel.getSourceObject().getId())
-      && (extRel.getSourceObject().getIdScope() == IdScope.GLOBAL || extRel.getSourceObject().getModuleKey().getClusterId()
-        .equals(replObj.getModuleKey().getClusterId()))
-      && (cndtRel.getTargetResolveScope() != ResolveScope.CLUSTER || extRel.getSourceObject().getModuleKey().getClusterId()
-        .equals(replObj.getModuleKey().getClusterId())))
+      && (extRel.getSourceObject().getIdScope() == IdScope.GLOBAL || extRel.getSourceObject().getModuleKey().getClusterId() //Objects can be connected in global scope or
+        .equals(replObj.getModuleKey().getClusterId()))                                                                     //in cluster scope if they are in the same cluster
+      && (cndtRel.getTargetResolveScope() != ResolveScope.CLUSTER || extRel.getSourceObject().getModuleKey().getClusterId() //If they are not in the same cluster resolution
+        .equals(replObj.getModuleKey().getClusterId())))                                                                    //scope can be GLOBAL, CASCADE_CLUSTER or CASCADE_MODULE
      return cndtRel;
    }
   }
@@ -2436,7 +2407,7 @@ public class SubmissionManager
   {
    tgObj = cstMeta.clusterIdMap.get(ref);
 
-   if(tgObj == null && rslv.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER)
+   if(tgObj == null && ( rslv.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER || rslv.getTargetResolveScope() == ResolveScope.CASCADE_MODULE ))
    {
     tgObj = ageStorage.getGlobalObject(ref);
 
