@@ -2661,7 +2661,60 @@ public class SubmissionManager
   return res;
  }
 
- private boolean checkExternalFileConnections(ClustMeta cMeta, LogNode logRoot)
+ private boolean reconnectExternalFileAttributes( ClustMeta cMeta, Set<String> remGlobFiles, LogNode logRoot )
+ {
+  LogNode logRecon = logRoot.branch("Reconnecting file attributes");
+
+  boolean res = true;
+
+  for(FileMeta glMeta : cMeta.att4G2L.values() )
+  {
+   GlobalObjectConnection conn = ageStorage.getGlobalFileConnection(glMeta.origFile.getId());
+   
+   if( conn == null )
+   {
+    res = false;
+    logRecon.log(Level.ERROR,
+     "File with ID '" + glMeta.origFile.getId() + "' is not global");
+
+    continue;
+   }    
+   
+   if( conn.getIncomingConnections() != null || conn.getIncomingConnections().size() > 0 )
+   {
+    res = false;
+    logRecon.log(Level.ERROR,
+     "File with ID '" + glMeta.origFile.getId() + "' is referred by the modules: " + conn.getIncomingConnections() + " and can't be deleted");
+
+    continue;
+   }
+   
+   remGlobFiles.add(glMeta.origFile.getId());
+  }
+  
+  for( FileAttachmentMeta fm : cMeta.att4Del.values() )
+  {
+   if( ! fm.isGlobal() )
+    continue;
+  
+   GlobalObjectConnection conn = ageStorage.getGlobalFileConnection(fm.getId());
+ 
+   if( conn.getIncomingConnections() == null || conn.getIncomingConnections().size() == 0 )
+   {
+    res = false;
+    logRecon.log(Level.ERROR,
+     "File with ID '" + fm.getId() + "' is referred by the modules: " + conn.getIncomingConnections() + " and can't be deleted");
+
+    continue;
+   }
+ 
+   remGlobFiles.add(fm.getId());
+  }
+  
+  return res;
+ }
+ 
+ private boolean checkExternalFileConnectionsX(ClustMeta cMeta, LogNode logRoot)
  {
 
   LogNode logRecon = logRoot.branch("Reconnecting file attributes");
@@ -2725,8 +2778,25 @@ public class SubmissionManager
   return res;
  }
 
+ private boolean connectNewFileAttributes( ClustMeta cMeta, LogNode reconnLog )
+ {
+  boolean res = true;
+
+  for( ModMeta mm : cMeta.incomingMods )
+  {
+   if( mm.newModule.getFileAttributes() == null )
+    continue;
+   
+   for( AgeFileAttributeWritable fatt : mm.newModule.getFileAttributes() )
+   {
+    if( fatt.getTargetResolveScope() == ResolveScope.CLUSTER || fatt.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+   }
+  }
+  
+ }
+ 
  @SuppressWarnings("unchecked")
- private boolean reconnectLocalModulesToFiles(ClustMeta cMeta, Collection<Pair<AgeFileAttributeWritable, Boolean>> fileConn, LogNode reconnLog)
+ private boolean reconnectLocalModulesToFiles(ClustMeta cMeta, LogNode reconnLog)
  {
   boolean res = true;
 
@@ -2748,15 +2818,13 @@ public class SubmissionManager
 
     if( cMeta.att4Del.containsKey(fattr.getFileId() ) )
     {
-     if( fattr.getTargetResolveScope() != ResolveScope.CASCADE_CLUSTER )
+     if( fattr.getTargetResolveScope() != ResolveScope.CASCADE_CLUSTER || ageStorage.getGlobalFileConnection(fattr.getFileId()) == null )
      {
       reconnLog.log(Level.ERROR,
         "Can't connect file attribute: '" + fattr.getFileId() + "'. Module: ID='" + mm.meta.getId() + "' Row: " + fattr.getOrder() + " Col: "
           + fattr.getClassReference().getOrder());
       res = false;
      }
-     else if( ageStorage.getAttachment(fattr.getFileId()) != null )
-      fileConn.add( new Pair<AgeFileAttributeWritable, Boolean>(fattr, true ) );
     }
     
    }
@@ -2819,6 +2887,7 @@ public class SubmissionManager
       
       globOk = true;
       
+      //Setting global object attachments
       if( ! gcon.getHostModuleKey().getClusterId().equals(cstMeta.id))
       {
        Set<DataModule> attMods = globAtt.get(exta.getTargetObjectId());
