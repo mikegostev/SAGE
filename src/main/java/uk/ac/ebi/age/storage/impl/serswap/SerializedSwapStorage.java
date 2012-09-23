@@ -1023,7 +1023,7 @@ public class SerializedSwapStorage implements AgeStorageAdm
         if( clustMap != null )
          tgObj = clustMap.get(relInfo.getTargetId());
         
-        if( tgObj == null && relInfo.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+        if( tgObj == null && relInfo.getTargetResolveScope() == ResolveScope.CLUSTER_CASCADE )
          tgObj = globalIndexMap.get(relInfo.getTargetId());
          
        }

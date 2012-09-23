@@ -855,7 +855,7 @@ public class SerializedStorage implements AgeStorageAdm
        if( clustMap != null )
         tgObj = clustMap.get(exr.getTargetObjectId());
        
-       if( tgObj == null && exr.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+       if( tgObj == null && exr.getTargetResolveScope() == ResolveScope.CLUSTER_CASCADE )
         tgObj = globalIndexMap.get(exr.getTargetObjectId());
         
       }

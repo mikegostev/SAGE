@@ -53,7 +53,7 @@ public class SwapCustomImplicitInvExtRelation extends SwapImplicitInvExtRelation
  @Override
  public ResolveScope getTargetResolveScope()
  {
-  return ResolveScope.CASCADE_CLUSTER;
+  return ResolveScope.CLUSTER_CASCADE;
  }
 
  @Override

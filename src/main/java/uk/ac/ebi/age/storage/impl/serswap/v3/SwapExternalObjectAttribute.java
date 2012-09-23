@@ -70,7 +70,7 @@ class SwapExternalObjectAttribute extends AgeExternalObjectAttributeImpl
   {
    tgt = stor.getClusterObject(masterObj.getModuleKey().getClusterId(), getTargetObjectId());
   
-   if( tgt == null && getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+   if( tgt == null && getTargetResolveScope() == ResolveScope.CLUSTER_CASCADE )
     tgt = stor.getGlobalObject( getTargetObjectId() );
   }
   

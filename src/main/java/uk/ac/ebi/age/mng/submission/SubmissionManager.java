@@ -2009,7 +2009,7 @@ public class SubmissionManager
      }
 
      invRel = tgObj.getDataModule().getContextSemanticModel()
-       .createExternalRelation(invCRef, tgObj, exr.getSourceObject().getId(), ResolveScope.CASCADE_CLUSTER);
+       .createExternalRelation(invCRef, tgObj, exr.getSourceObject().getId(), ResolveScope.CLUSTER_CASCADE);
      invRel.setInferred(true);
 
      invRel.setTargetObject(exr.getSourceObject());
@@ -2250,7 +2250,7 @@ public class SubmissionManager
         cstMeta.relRefMap.put(extRel.getAgeElClass(), invCRef);
        }
 
-       dirRel = replObj.getDataModule().getContextSemanticModel().createExternalRelation(invCRef, replObj, target.getId(), ResolveScope.CASCADE_CLUSTER);
+       dirRel = replObj.getDataModule().getContextSemanticModel().createExternalRelation(invCRef, replObj, target.getId(), ResolveScope.CLUSTER_CASCADE);
 
        dirRel.setInferred(true);
 
@@ -2283,7 +2283,7 @@ public class SubmissionManager
 
    for(AgeExternalRelationWritable extRel : origExtRels)
    {
-    if( extRel.isInferred() || ( extRel.getTargetResolveScope() != ResolveScope.CASCADE_CLUSTER && extRel.getTargetResolveScope() != ResolveScope.CASCADE_MODULE ) )
+    if( extRel.isInferred() || ( extRel.getTargetResolveScope() != ResolveScope.CLUSTER_CASCADE && extRel.getTargetResolveScope() != ResolveScope.MODULE_CASCADE ) )
      continue;
 
     AgeObjectWritable newTarget = cstMeta.clusterIdMap.get(extRel.getTargetObjectId()); // newTarget can only be of the new objects
@@ -2311,7 +2311,7 @@ public class SubmissionManager
       res = false;
 
       logRecon.log(Level.ERROR, "Object " + objId2Str(relSource) + " has relation (Class: '" + extRel.getAgeElClass() + "') with "
-        + ResolveScope.CASCADE_CLUSTER.name() + " resolution scope pointing to object " + objId2Str(oldTarget)
+        + ResolveScope.CLUSTER_CASCADE.name() + " resolution scope pointing to object " + objId2Str(oldTarget)
         + " in global scope and this relation can be reconnected to object " + objId2Str(newTarget)
         + " but current relation has explicit inverse relation that can't be reconnected");
 
@@ -2407,7 +2407,7 @@ public class SubmissionManager
   {
    tgObj = cstMeta.clusterIdMap.get(ref);
 
-   if(tgObj == null && ( rslv.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER || rslv.getTargetResolveScope() == ResolveScope.CASCADE_MODULE ))
+   if(tgObj == null && ( rslv.getTargetResolveScope() == ResolveScope.CLUSTER_CASCADE || rslv.getTargetResolveScope() == ResolveScope.MODULE_CASCADE ))
    {
     tgObj = ageStorage.getGlobalObject(ref);
 
@@ -2635,7 +2635,7 @@ public class SubmissionManager
 
      if( fmt != null )
       fattr.setResolvedGlobal(false);
-     else if( fattr.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+     else if( fattr.getTargetResolveScope() == ResolveScope.CLUSTER_CASCADE )
      {
       if(ageStorage.getAttachment(fattr.getFileId()) == null)
       {
@@ -2782,17 +2782,41 @@ public class SubmissionManager
  {
   boolean res = true;
 
-  for( ModMeta mm : cMeta.incomingMods )
+  for(ModMeta mm : cMeta.incomingMods)
   {
-   if( mm.newModule.getFileAttributes() == null )
+   if(mm.newModule.getFileAttributes() == null)
     continue;
-   
-   for( AgeFileAttributeWritable fatt : mm.newModule.getFileAttributes() )
+
+   for(AgeFileAttributeWritable fatt : mm.newModule.getFileAttributes())
    {
-    if( fatt.getTargetResolveScope() == ResolveScope.CLUSTER || fatt.getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+    if(fatt.getTargetResolveScope() != ResolveScope.GLOBAL)
+    {
+     if(cMeta.att4Use.containsKey(fatt.getFileId()))
+      continue;
+     else if(fatt.getTargetResolveScope() == ResolveScope.CLUSTER)
+     {
+      reconnLog.log(Level.ERROR,
+        "Can't connect file attribute: '" + fatt.getFileId() + "'. Module: ID='" + mm.meta.getId() + "' Row: " + fatt.getOrder() + " Col: "
+          + fatt.getClassReference().getOrder());
+      res = false;
+
+      continue;
+     }
+    }
+
+    if(ageStorage.getGlobalFileConnection(fatt.getFileId()) == null || cMeta.att4G2L.containsKey(fatt.getFileId()) || cMeta.att4Del.containsKey(fatt.getFileId()))
+    {
+     reconnLog.log(Level.ERROR,
+       "Can't connect file attribute: '" + fatt.getFileId() + "'. Module: ID='" + mm.meta.getId() + "' Row: " + fatt.getOrder() + " Col: "
+         + fatt.getClassReference().getOrder());
+     res = false;
+
+     continue;
+    }
    }
   }
-  
+
+  return res;
  }
  
  @SuppressWarnings("unchecked")
@@ -2818,7 +2842,7 @@ public class SubmissionManager
 
     if( cMeta.att4Del.containsKey(fattr.getFileId() ) )
     {
-     if( fattr.getTargetResolveScope() != ResolveScope.CASCADE_CLUSTER || ageStorage.getGlobalFileConnection(fattr.getFileId()) == null )
+     if( fattr.getTargetResolveScope() != ResolveScope.CLUSTER_CASCADE || ageStorage.getGlobalFileConnection(fattr.getFileId()) == null )
      {
       reconnLog.log(Level.ERROR,
         "Can't connect file attribute: '" + fattr.getFileId() + "'. Module: ID='" + mm.meta.getId() + "' Row: " + fattr.getOrder() + " Col: "

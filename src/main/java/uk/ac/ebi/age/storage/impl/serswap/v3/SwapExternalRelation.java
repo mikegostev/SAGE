@@ -54,7 +54,7 @@ public class SwapExternalRelation extends AgeExternalRelationImpl
   {
    tgObj = stor.getClusterObject(getSourceObject().getModuleKey().getClusterId(), getTargetObjectId());
    
-   if( tgObj == null && getTargetResolveScope() == ResolveScope.CASCADE_CLUSTER )
+   if( tgObj == null && getTargetResolveScope() == ResolveScope.CLUSTER_CASCADE )
     tgObj = stor.getGlobalObject( getTargetObjectId() );
     
   }
