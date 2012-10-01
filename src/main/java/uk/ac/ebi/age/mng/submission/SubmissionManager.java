@@ -2874,7 +2874,7 @@ public class SubmissionManager
 
    for(AgeExternalObjectAttributeWritable exta : mm.newModule.getExternalObjectAttributes() )
    {
-    if(exta.getTargetResolveScope() != ResolveScope.GLOBAL)
+    if(exta.getTargetResolveScope() != ResolveScope.GLOBAL && exta.getTargetResolveScope() != ResolveScope.GLOBAL_FALLBACK )
     {
      if(cstMeta.clusterIdMap.containsKey(exta.getTargetObjectId()))
       continue;
@@ -2891,16 +2891,31 @@ public class SubmissionManager
 
     boolean globOk=false;
     
-    if(  cstMeta.newGlobalIdMap.containsKey(exta.getTargetObjectId()) ) // no more actions needed
-     globOk = true;
+    AgeObject tgObj = cstMeta.newGlobalIdMap.get(exta.getTargetObjectId());
     
+    if(  tgObj != null ) // no more actions needed
+    {
+     if( ! tgObj.getAgeElClass().isClassOrSubclassOf(exta.getAgeElClass().getTargetClass()) )
+     {
+      mdres = false;
+      extAttrModLog.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+      continue;
+     }
+     
+     globOk = true;
+    }
     else if( ! cstMeta.obsoleteGlobalIdMap.containsKey(exta.getTargetObjectId()) ) // if obsoleteGlobalIdMap contains targetId then resolution will fail
     {
      GlobalObjectConnection gcon = ageStorage.getGlobalObjectConnection(exta.getTargetObjectId());
      
      if( gcon != null )
      {
-      AgeClass tgCls = ageStorage.getSemanticModel().getDefinedAgeClass(gcon.getClassName());
+      AgeClass tgCls = null;
+      
+      if( gcon.getClassName() != null)
+       tgCls = ageStorage.getSemanticModel().getDefinedAgeClass(gcon.getClassName());
+      else
+       tgCls = ageStorage.getGlobalObject(exta.getTargetObjectId()).getAgeElClass();
       
       if( ! tgCls.isClassOrSubclassOf(exta.getAgeElClass().getTargetClass()) )
       {
@@ -2924,7 +2939,7 @@ public class SubmissionManager
      }
     }
     
-    if( ! globOk )
+    if( exta.getTargetResolveScope() != ResolveScope.GLOBAL_FALLBACK &&  ! globOk )
     {
      mdres = false;
      if( exta.getTargetResolveScope() == ResolveScope.GLOBAL )
