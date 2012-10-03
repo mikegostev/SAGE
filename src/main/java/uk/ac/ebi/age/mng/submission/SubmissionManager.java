@@ -138,6 +138,8 @@ public class SubmissionManager
   Map<String, AgeObjectWritable>          obsoleteGlobalIdMap = new HashMap<String, AgeObjectWritable>();
 
   Map<AgeRelationClass, RelationClassRef> relRefMap      = new HashMap<AgeRelationClass, RelationClassRef>();
+  
+  ConnectionInfo connInfo = new ConnectionInfo();  
  }
 
 
@@ -2453,7 +2455,7 @@ public class SubmissionManager
  // c) adding GlobalObjectConnection to attrReConn to reset obsolete cached connection
  // d) connection from within the same cluster and resolution CASCADE_CLUSTER - try to re-resolve in cluster pool
 
- private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta, Set<ModuleKey> mods2reset, Map<String,Set<DataModule>> disconMap,  LogNode logRoot)
+ private boolean reconnectExternalObjectAttributes(ClustMeta cstMeta,  LogNode logRoot)
  {
   LogNode logRecon = logRoot.branch("Reconnecting external object attributes");
 
@@ -2499,7 +2501,7 @@ public class SubmissionManager
         continue;
        }
 
-       mods2reset.addAll(objConn.getIncomingConnections().keySet());
+       cstMeta.connInfo.getResetModules().addAll(objConn.getIncomingConnections().keySet());
       }
       else
       {
@@ -2523,10 +2525,10 @@ public class SubmissionManager
      if( (exta.getTargetResolveScope() == ResolveScope.GLOBAL || ageStorage.getClusterObject(cstMeta.id, tgtId ) == null) 
          && ! cstMeta.obsoleteGlobalIdMap.containsKey(tgtId) )
      {
-      Set<DataModule> globset = disconMap.get(tgtId);
+      Set<DataModule> globset = cstMeta.connInfo.getGlobalDetachments().get(tgtId);
       
       if( globset == null )
-       disconMap.put(tgtId,globset=new HashSet<DataModule>());
+       cstMeta.connInfo.getGlobalDetachments().put(tgtId,globset=new HashSet<DataModule>());
       
       globset.add(mm.origModule);
      }
@@ -2594,7 +2596,7 @@ public class SubmissionManager
      continue;
     }
     
-    mods2reset.add(mm.origModule.getModuleKey());
+    cstMeta.connInfo.getResetModules().add(mm.origModule.getModuleKey());
     
    }
    
@@ -2858,7 +2860,7 @@ public class SubmissionManager
   return res;
  }
 
- private boolean connectNewObjectAttributes(ClustMeta cstMeta, Map<String, Set<DataModule>> globAtt, LogNode logRoot)
+ private boolean connectNewObjectAttributes(ClustMeta cstMeta, LogNode logRoot)
  {
   LogNode extAttrLog = logRoot.branch("Connecting external object attributes");
   boolean extAttrRes = true;
@@ -2874,6 +2876,16 @@ public class SubmissionManager
 
    for(AgeExternalObjectAttributeWritable exta : mm.newModule.getExternalObjectAttributes() )
    {
+    if( exta.getTargetResolveScope() == ResolveScope.GLOBAL_FALLBACK )
+    {
+     Set<DataModule> attMods = cstMeta.connInfo.getGlobalAttachmentRequests().get(exta.getTargetObjectId());
+     
+     if( attMods == null )
+      cstMeta.connInfo.getGlobalAttachmentRequests().put(exta.getTargetObjectId(), attMods = new HashSet<DataModule>() );
+     
+     attMods.add(mm.newModule);
+    }
+    
     if(exta.getTargetResolveScope() != ResolveScope.GLOBAL && exta.getTargetResolveScope() != ResolveScope.GLOBAL_FALLBACK )
     {
      if(cstMeta.clusterIdMap.containsKey(exta.getTargetObjectId()))
@@ -2917,10 +2929,16 @@ public class SubmissionManager
       else
        tgCls = ageStorage.getGlobalObject(exta.getTargetObjectId()).getAgeElClass();
       
-      if( ! tgCls.isClassOrSubclassOf(exta.getAgeElClass().getTargetClass()) )
+      if( ! tgCls.isClassOrSubclassOf(exta.getAgeElClass().getTargetClass())  )
       {
-       mdres = false;
-       extAttrModLog.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+       if( exta.getTargetResolveScope() != ResolveScope.GLOBAL_FALLBACK )
+       {
+        mdres = false;
+        extAttrModLog.log(Level.ERROR, "Object attribute is resolved to the object of incompatible class " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+       }
+       else
+        extAttrModLog.log(Level.WARN, "A global object has incompatible class for GLOBAL_FALLBACK object attribute " + objId2Str(exta.getMasterObject()) + " Attribute: "+exta.getClassReference().getHeading());
+
        continue;
       }
       
@@ -2929,10 +2947,10 @@ public class SubmissionManager
       //Setting global object attachments
       if( ! gcon.getHostModuleKey().getClusterId().equals(cstMeta.id))
       {
-       Set<DataModule> attMods = globAtt.get(exta.getTargetObjectId());
+       Set<DataModule> attMods = cstMeta.connInfo.getGlobalAttachments().get(exta.getTargetObjectId());
        
        if( attMods == null )
-        globAtt.put(exta.getTargetObjectId(), attMods = new HashSet<DataModule>() );
+        cstMeta.connInfo.getGlobalAttachments().put(exta.getTargetObjectId(), attMods = new HashSet<DataModule>() );
        
        attMods.add(mm.newModule);
       }

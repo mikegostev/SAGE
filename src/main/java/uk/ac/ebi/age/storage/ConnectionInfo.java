@@ -1,8 +1,12 @@
 package uk.ac.ebi.age.storage;
 
 import java.util.Collection;
+import java.util.Map;
+import java.util.Set;
 
 import uk.ac.ebi.age.model.AgeObject;
+import uk.ac.ebi.age.model.DataModule;
+import uk.ac.ebi.age.model.ModuleKey;
 import uk.ac.ebi.age.model.writable.AgeExternalObjectAttributeWritable;
 import uk.ac.ebi.age.model.writable.AgeExternalRelationWritable;
 import uk.ac.ebi.age.model.writable.AgeFileAttributeWritable;
@@ -66,5 +70,30 @@ public class ConnectionInfo
  public void setRelationsAttachment(Collection<AgeRelationWritable> relationsAttachment)
  {
   this.relationsAttachment = relationsAttachment;
+ }
+
+ public Map<String, Set<DataModule>> getGlobalAttachments()
+ {
+  // TODO Auto-generated method stub
+  return null;
+ }
+
+ public Map<String, Set<DataModule>> getGlobalDetachments()
+ {
+  // TODO Auto-generated method stub
+  return null;
+ }
+
+ public Map<String, Set<DataModule>> getGlobalAttachmentRequests()
+ {
+  // TODO Auto-generated method stub
+  return null;
+  
+ }
+
+ public Set<ModuleKey> getResetModules()
+ {
+  // TODO Auto-generated method stub
+  return null;
  }
 }
