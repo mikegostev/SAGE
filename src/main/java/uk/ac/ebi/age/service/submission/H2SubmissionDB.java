@@ -1,8 +1,7 @@
-package uk.ac.ebi.age.service.submission.impl;
+package uk.ac.ebi.age.service.submission;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -21,6 +20,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.apache.commons.transaction.file.FileResourceManager;
+import org.apache.commons.transaction.file.ResourceManagerException;
+
 import uk.ac.ebi.age.ext.submission.AttachmentDiff;
 import uk.ac.ebi.age.ext.submission.DataModuleDiff;
 import uk.ac.ebi.age.ext.submission.DataModuleMeta;
@@ -34,9 +36,15 @@ import uk.ac.ebi.age.ext.submission.SubmissionMeta;
 import uk.ac.ebi.age.ext.submission.SubmissionQuery;
 import uk.ac.ebi.age.ext.submission.SubmissionQuery.Selector;
 import uk.ac.ebi.age.ext.submission.SubmissionReport;
-import uk.ac.ebi.age.service.submission.SubmissionDB;
+import uk.ac.ebi.age.transaction.InvalidStateException;
+import uk.ac.ebi.age.transaction.ReadLock;
+import uk.ac.ebi.age.transaction.Transaction;
+import uk.ac.ebi.age.transaction.TransactionException;
+import uk.ac.ebi.age.transaction.UpgradableReadLock;
 import uk.ac.ebi.age.util.FileUtil;
 import uk.ac.ebi.mg.filedepot.FileDepot;
+import uk.ac.ebi.mg.rwarbiter.InvalidTokenException;
+import uk.ac.ebi.mg.rwarbiter.UpgradableRWArbiter;
 
 import com.pri.util.M2Pcodec;
 import com.pri.util.StringUtils;
@@ -100,20 +108,40 @@ public class H2SubmissionDB extends SubmissionDB
  private FileDepot docDepot;
  private FileDepot attachmentDepot;
  
+ private final UpgradableRWArbiter<SDBReadLock,SDBTransaction,SDBUpgReadLock> arbiter = new UpgradableRWArbiter<>( new TokFactory() );
  
  private String connectionString;
 
+ private FileResourceManager txManager;
+
+ private String docDepotRelPath;
+ private String attDepotRelPath;
+ 
+ private String transactionId;
+ 
  private static StringUtils.ReplacePair likePairs[] = new StringUtils.ReplacePair[]
                  {
                   new StringUtils.ReplacePair('\'',"''"), 
                   new StringUtils.ReplacePair('*',"%") 
                  };
  
- public H2SubmissionDB( File sbmDbRoot )
+ public H2SubmissionDB( FileResourceManager frm, String submRelPath )
  {
   try
   {
    Class.forName("org.h2.Driver");
+   
+   if( submRelPath.length() > 0 && ( submRelPath.charAt(0) == '/' || submRelPath.charAt(0) == '\\' ) )
+    submRelPath = submRelPath.substring(1);
+
+   int pos = submRelPath.length()-1;
+   if( pos >= 0 &&  submRelPath.charAt(pos) != '/' && submRelPath.charAt(0) != '\\'  )
+    submRelPath = submRelPath+'/';
+   
+   docDepotRelPath=submRelPath+docDepotPath+'/';
+   attDepotRelPath=submRelPath+attDepotPath+'/';
+   
+   File sbmDbRoot = new  File( frm.getStoreDir() , submRelPath );
    
    connectionString = "jdbc:h2:"+new File(sbmDbRoot,h2DbPath).getAbsolutePath();
    
@@ -218,11 +246,24 @@ public class H2SubmissionDB extends SubmissionDB
   }
  }
  
- 
+ private String getTxId() throws ResourceManagerException
+ {
+  if( transactionId != null )
+   return transactionId;
+  
+  transactionId = txManager.generatedUniqueTxId();
+  
+  txManager.startTransaction(transactionId);
+  
+  return transactionId;
+ }
  
  @Override
- public void storeSubmission(SubmissionMeta sMeta, SubmissionMeta oldSbm, String updateDescr) throws SubmissionDBException
+ public void storeSubmission( SDBTransaction t, SubmissionMeta sMeta, SubmissionMeta oldSbm, String updateDescr) throws SubmissionDBException
  {
+  if(!t.isActive())
+   throw new InvalidStateException();
+  
   SubmissionDiff diff = null;
   
   diff = calculateDiff(sMeta,oldSbm);
@@ -324,9 +365,9 @@ public class H2SubmissionDB extends SubmissionDB
 
      if( dmm.getText() != null )
      {
-      File outPFile = docDepot.getFilePath(dmm.getId(), dmm.getDocVersion());
-      
-      OutputStreamWriter wrtr = new OutputStreamWriter(new FileOutputStream(outPFile), docCharset);
+      OutputStreamWriter wrtr = new OutputStreamWriter(
+        txManager.writeResource(getTxId(), 
+          docDepotRelPath+docDepot.getRelativeFilePath(dmm.getId(), dmm.getDocVersion())), docCharset);
       
       wrtr.write(dmm.getText());
       
@@ -362,21 +403,9 @@ public class H2SubmissionDB extends SubmissionDB
     pstsmt.close(); 
    }
 
-   conn.commit();
   }
   catch(Exception e)
   {
-   if( conn != null )
-   {
-    try
-    {
-     conn.rollback();
-    }
-    catch(SQLException e1)
-    {
-     e1.printStackTrace();
-    }
-   }
    e.printStackTrace();
    
    throw new SubmissionDBException("System error", e);
@@ -399,9 +428,12 @@ public class H2SubmissionDB extends SubmissionDB
  }
 
  @Override
- public boolean tranklucateSubmission(String sbmID) throws SubmissionDBException
+ public boolean tranklucateSubmission( SDBTransaction t, String sbmID) throws SubmissionDBException
  {
-  List<HistoryEntry> hist = getHistory(sbmID);
+  if(!t.isActive())
+   throw new InvalidStateException();
+
+  List<HistoryEntry> hist = getHistory(t, sbmID);
   
   if( hist == null || hist.size() == 0 )
    return false;
@@ -414,7 +446,7 @@ public class H2SubmissionDB extends SubmissionDB
    {
     for( DataModuleDiff dmd : mDiffs )
     {
-     File modFile = getDocument(sbmID, dmd.getId(), dmd.getNewDocumentVersion());
+     File modFile = getDocument(t, sbmID, dmd.getId(), dmd.getNewDocumentVersion());
      
      System.out.println("Deleting module file: "+modFile.getAbsolutePath());
      
@@ -432,7 +464,7 @@ public class H2SubmissionDB extends SubmissionDB
    {
     for( AttachmentDiff atd : aDiffs )
     {
-     File attFile = getAttachment(sbmID, atd.getId(), atd.getNewFileVersion());
+     File attFile = getAttachment(t, sbmID, atd.getId(), atd.getNewFileVersion());
      
      System.out.println("Deleting attachment file: "+attFile.getAbsolutePath());
      
@@ -507,15 +539,15 @@ public class H2SubmissionDB extends SubmissionDB
 
  
  @Override
- public boolean removeSubmission(String sbmID) throws SubmissionDBException
+ public boolean removeSubmission(SDBTransaction t, String sbmID) throws SubmissionDBException
  {
-  return setSubmissionRemoved( sbmID, true );
+  return setSubmissionRemoved(t, sbmID, true );
  }
  
  @Override
- public boolean restoreSubmission(String sbmID) throws SubmissionDBException
+ public boolean restoreSubmission(SDBTransaction t, String sbmID) throws SubmissionDBException
  {
-  return setSubmissionRemoved( sbmID, false );
+  return setSubmissionRemoved(t, sbmID, false );
  }
 
  
@@ -573,7 +605,7 @@ public class H2SubmissionDB extends SubmissionDB
  }
  
  @Override
- public List<HistoryEntry> getHistory( String sbmId ) throws SubmissionDBException
+ public List<HistoryEntry> getHistory( SDBReadLock rl, String sbmId ) throws SubmissionDBException
  {
   Connection conn = null;
   
@@ -903,7 +935,7 @@ public class H2SubmissionDB extends SubmissionDB
  }
 
  @Override
- public SubmissionReport getSubmissions(SubmissionQuery q) throws SubmissionDBException
+ public SubmissionReport getSubmissions(SDBReadLock rl, SubmissionQuery q) throws SubmissionDBException
  {
   String query = q.getQuery();
   
@@ -1380,15 +1412,178 @@ public class H2SubmissionDB extends SubmissionDB
  }
 
  @Override
- public File getAttachment( String clustId, String fileId, long ver )
+ public File getAttachment(ReadLock rl, String clustId, String fileId, long ver )
  {
+  if(!rl.isActive())
+   throw new InvalidStateException();
+  
   return attachmentDepot.getFilePath(createFileId(clustId, fileId), ver);
  }
 
  @Override
- public File getDocument(String clustId, String docId, long ver)
+ public File getDocument(ReadLock rl, String clustId, String docId, long ver)
  {
+  if(!rl.isActive())
+   throw new InvalidStateException();
+
   return docDepot.getFilePath(docId, ver);
+ }
+
+ @Override
+ public ReadLock getReadLock()
+ {
+  return arbiter.getReadLock();
+ }
+
+ @Override
+ public UpgradableReadLock getUpgradableReadLock()
+ {
+  return arbiter.getUpgradableReadLock();
+ }
+
+ @Override
+ public void releaseLock(ReadLock l)
+ {
+  if(!l.isActive())
+   throw new InvalidStateException();
+
+  if( l instanceof Transaction )
+   throw new InvalidStateException("Use commit or rollback for transactions");
+
+  try
+  {
+   arbiter.releaseLock((TokenT) l);
+  }
+  catch(InvalidTokenException e)
+  {
+   throw new InvalidStateException();
+  }
+
+ }
+
+ @Override
+ public Transaction startTransaction()
+ {
+  return arbiter.getWriteLock();
+ }
+
+ @Override
+ public void commitTransaction(Transaction t) throws TransactionException
+ {
+  if(!t.isActive())
+   throw new InvalidStateException();
+
+  try
+  {
+   if(!((TransactionToken) t).isPrepared())
+   {
+    permConn.commit();
+    return;
+   }
+
+   Statement s = getStatement((TranTok) t);
+
+   s.executeUpdate("COMMIT TRANSACTION T1");
+  }
+  catch(SQLException e)
+  {
+   throw new TransactionException("Commit failed", e);
+  }
+  finally
+  {
+   try
+   {
+    arbiter.releaseLock((TranTok) t);
+   }
+   catch(InvalidTokenException e)
+   {
+    throw new TransactionException("Invalid token type", e);
+   }
+
+   Statement s = ((TranTok) t).getStatement();
+
+   if(s != null)
+   {
+    try
+    {
+     s.close();
+    }
+    catch(SQLException e)
+    {
+     e.printStackTrace();
+    }
+   }
+  }
+
+ }
+
+ @Override
+ public void rollbackTransaction(Transaction t) throws TransactionException
+ {
+  if(!t.isActive())
+   throw new InvalidStateException();
+
+  try
+  {
+   if(!((TranTok) t).isPrepared())
+   {
+    permConn.rollback();
+    return;
+   }
+
+   Statement s = getStatement((TranTok) t);
+
+   s.executeUpdate("ROLLBACK TRANSACTION T1");
+   
+   buildCache();
+  }
+  catch(Exception e)
+  {
+   throw new TransactionException("Rollback failed", e);
+  }
+  finally
+  {
+   try
+   {
+    arbiter.releaseLock((TranTok) t);
+   }
+   catch(InvalidTokenException e)
+   {
+    throw new TransactionException("Invalid token type", e);
+   }
+
+   Statement s = ((TranTok) t).getStatement();
+
+   if(s != null)
+   {
+    try
+    {
+     s.close();
+    }
+    catch(SQLException e)
+    {
+     e.printStackTrace();
+    }
+   }
+
+  }
+ }
+
+ @Override
+ public void prepareTransaction(Transaction t) throws TransactionException
+ {
+  try
+  {
+   Statement s = getStatement((TranTok) t);
+
+   s.executeUpdate("PREPARE COMMIT T1");
+
+   ((TranTok) t).setPrepared(true);
+  }
+  catch(SQLException e)
+  {
+   throw new TransactionException("Commit preparation failed", e);
+  }
  }
 
 

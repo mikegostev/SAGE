@@ -27,12 +27,14 @@ import uk.ac.ebi.age.transaction.InvalidStateException;
 import uk.ac.ebi.age.transaction.ReadLock;
 import uk.ac.ebi.age.transaction.Transaction;
 import uk.ac.ebi.age.transaction.TransactionException;
+import uk.ac.ebi.age.transaction.UpgradableReadLock;
+import uk.ac.ebi.age.transaction.UpgradableReadLockToken;
 import uk.ac.ebi.mg.assertlog.Log;
 import uk.ac.ebi.mg.assertlog.LogFactory;
 import uk.ac.ebi.mg.rwarbiter.InvalidTokenException;
-import uk.ac.ebi.mg.rwarbiter.RWArbiter;
 import uk.ac.ebi.mg.rwarbiter.TokenFactory;
-import uk.ac.ebi.mg.rwarbiter.TokenW;
+import uk.ac.ebi.mg.rwarbiter.TokenT;
+import uk.ac.ebi.mg.rwarbiter.UpgradableRWArbiter;
 
 import com.pri.util.ObjectRecycler;
 
@@ -60,20 +62,33 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
 
  private AnnotationCache               cache;
 
- private ObjectRecycler<StringBuilder> sbRecycler          = new ObjectRecycler<StringBuilder>(3);
+ private final ObjectRecycler<StringBuilder> sbRecycler          = new ObjectRecycler<StringBuilder>(3);
 
- private FileResourceManager           txManager;
- private String                        cacheFileRelPath;
- private File                          cacheFile;
+ private final FileResourceManager           txManager;
+ private final String                        cacheFileRelPath;
+ private final File                          cacheFile;
 
- private AtomicBoolean                 cacheDirty          = new AtomicBoolean(false);
+ private final AtomicBoolean                 cacheDirty          = new AtomicBoolean(false);
 
- private RWArbiter<TrnInfo>            arbiter             = new RWArbiter<TrnInfo>(new TokenFactory<TrnInfo>()
+ private final UpgradableRWArbiter<RLTok,TranTok,RLTok> arbiter = new UpgradableRWArbiter<RLTok,TranTok,RLTok>(new TokenFactory<RLTok,TranTok,RLTok>()
                                                            {
+
                                                             @Override
-                                                            public TrnInfo createToken()
+                                                            public RLTok createReadToken()
                                                             {
-                                                             return new TrnInfo();
+                                                             return new RLTok();
+                                                            }
+
+                                                            @Override
+                                                            public TranTok createWriteToken()
+                                                            {
+                                                             return new TranTok();
+                                                            }
+
+                                                            @Override
+                                                            public RLTok createUpgradableReadToken()
+                                                            {
+                                                             return new RLTok();
                                                             }
                                                            });
 
@@ -254,7 +269,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
     {
      if( System.currentTimeMillis()-lastUpdateTime > CACHE_DUMP_DELAY )
      {
-      TokenW wtok = arbiter.getWriteLock();
+      TokenT wtok = arbiter.getWriteLock();
       
       try
       {
@@ -332,7 +347,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  }
 
 
- private Statement getStatement(TrnInfo ti) throws SQLException
+ private Statement getStatement(RLTok ti) throws SQLException
  {
   if(ti.getStatement() != null)
    return ti.getStatement();
@@ -361,7 +376,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public Object getAnnotation(Topic tpc, Entity objId, boolean recurs) throws AnnotationDBException
  {
-  TrnInfo ti = arbiter.getReadLock();
+  RLTok ti = arbiter.getReadLock();
 
   try
   {
@@ -383,7 +398,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public Object getAnnotation(ReadLock lock, Topic tpc, Entity objId, boolean recurs) throws AnnotationDBException
  {
-  if(!((TrnInfo) lock).isActive())
+  if(!lock.isActive())
    throw new InvalidStateException();
 
   Entity cEnt = objId;
@@ -405,7 +420,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  
  public Object getAnnotationNC(ReadLock lock, Topic tpc, Entity objId, boolean recurs) throws AnnotationDBException
  {
-  if(!((TrnInfo) lock).isActive())
+  if(!lock.isActive())
    throw new InvalidStateException();
 
   StringBuilder sb = sbRecycler.getObject();
@@ -418,7 +433,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   try
   {
 
-   stmt = getStatement((TrnInfo) lock);
+   stmt = getStatement((RLTok) lock);
 
    Entity ce = objId;
 
@@ -486,7 +501,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public boolean addAnnotation(Topic tpc, Entity objId, Serializable value) throws AnnotationDBException
  {
-  TrnInfo ti = arbiter.getWriteLock();
+  TranTok ti = arbiter.getWriteLock();
 
   try
   {
@@ -519,7 +534,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public boolean addAnnotation(Transaction trn, Topic tpc, Entity objId, Serializable value) throws AnnotationDBException
  {
-  if(!((TrnInfo) trn).isActive())
+  if(!trn.isActive())
    throw new InvalidStateException();
 
   PreparedStatement pstmt = null;
@@ -574,7 +589,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public boolean removeAnnotation(Transaction trn, Topic tpc, Entity objId, boolean rec) throws AnnotationDBException
  {
-  if(!((TrnInfo) trn).isActive())
+  if(!trn.isActive())
    throw new InvalidStateException();
 
   StringBuilder sb = sbRecycler.getObject();
@@ -587,7 +602,7 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   try
   {
 
-   stmt = getStatement((TrnInfo) trn);
+   stmt = getStatement((RLTok) trn);
 
    sb.append(deleteAnnotationSQL);
 
@@ -635,22 +650,22 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public void releaseLock(ReadLock l)
  {
-  if(!((TrnInfo) l).isActive())
+  if(!l.isActive())
    throw new InvalidStateException();
 
-  if(arbiter.isWriteToken((TrnInfo) l))
+  if( l instanceof Transaction )
    throw new InvalidStateException("Use commit or rollback for transactions");
 
   try
   {
-   arbiter.releaseLock((TrnInfo) l);
+   arbiter.releaseLock((RLTok) l);
   }
   catch(InvalidTokenException e)
   {
    throw new InvalidStateException();
   }
 
-  Statement s = ((TrnInfo) l).getStatement();
+  Statement s = ((RLTok) l).getStatement();
 
   try
   {
@@ -672,18 +687,18 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public void commitTransaction(Transaction t) throws TransactionException
  {
-  if(!((TrnInfo) t).isActive())
+  if(!t.isActive())
    throw new InvalidStateException();
 
   try
   {
-   if(!((TrnInfo) t).isPrepared())
+   if(!((TranTok) t).isPrepared())
    {
     permConn.commit();
     return;
    }
 
-   Statement s = getStatement((TrnInfo) t);
+   Statement s = getStatement((TranTok) t);
 
    s.executeUpdate("COMMIT TRANSACTION T1");
   }
@@ -695,14 +710,14 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   {
    try
    {
-    arbiter.releaseLock((TrnInfo) t);
+    arbiter.releaseLock((TranTok) t);
    }
    catch(InvalidTokenException e)
    {
     throw new TransactionException("Invalid token type", e);
    }
 
-   Statement s = ((TrnInfo) t).getStatement();
+   Statement s = ((TranTok) t).getStatement();
 
    if(s != null)
    {
@@ -722,18 +737,18 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  @Override
  public void rollbackTransaction(Transaction t) throws TransactionException
  {
-  if(!((TrnInfo) t).isActive())
+  if(!t.isActive())
    throw new InvalidStateException();
 
   try
   {
-   if(!((TrnInfo) t).isPrepared())
+   if(!((TranTok) t).isPrepared())
    {
     permConn.rollback();
     return;
    }
 
-   Statement s = getStatement((TrnInfo) t);
+   Statement s = getStatement((TranTok) t);
 
    s.executeUpdate("ROLLBACK TRANSACTION T1");
    
@@ -747,14 +762,14 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   {
    try
    {
-    arbiter.releaseLock((TrnInfo) t);
+    arbiter.releaseLock((TranTok) t);
    }
    catch(InvalidTokenException e)
    {
     throw new TransactionException("Invalid token type", e);
    }
 
-   Statement s = ((TrnInfo) t).getStatement();
+   Statement s = ((TranTok) t).getStatement();
 
    if(s != null)
    {
@@ -776,11 +791,11 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
  {
   try
   {
-   Statement s = getStatement((TrnInfo) t);
+   Statement s = getStatement((TranTok) t);
 
    s.executeUpdate("PREPARE COMMIT T1");
 
-   ((TrnInfo) t).setPrepared(true);
+   ((TranTok) t).setPrepared(true);
   }
   catch(SQLException e)
   {
@@ -788,22 +803,10 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   }
  }
 
- private static class TrnInfo implements TokenW, Transaction
+ private static class RLTok extends UpgradableReadLockToken
  {
-  private boolean   active   = true;
-  private boolean   prepared = false;
   private Statement stmt;
-
-  public boolean isActive()
-  {
-   return active;
-  }
-
-  public void setActive(boolean active)
-  {
-   this.active = active;
-  }
-
+  
   public Statement getStatement()
   {
    return stmt;
@@ -813,7 +816,12 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   {
    this.stmt = stmt;
   }
-
+ }
+ 
+ private static class TranTok extends RLTok implements Transaction
+ {
+  private boolean   prepared = false;
+  
   public boolean isPrepared()
   {
    return prepared;
@@ -823,6 +831,25 @@ public class H2AnnotationStorage extends AbstractAnnotationStorage
   {
    this.prepared = prepared;
   }
-
  }
+
+ @Override
+ public UpgradableReadLock getUpgradableReadLock()
+ {
+  return arbiter.getUpgradableReadLock();
+ }
+
+ @Override
+ public Transaction startTransaction(UpgradableReadLock rl) throws TransactionException
+ {
+  try
+  {
+   return arbiter.upgradeReadLock((RLTok)rl);
+  }
+  catch(InvalidTokenException e)
+  {
+   throw new TransactionException("Invalid token type", e);
+  }
+ }
+
 }

@@ -15,50 +15,32 @@ import uk.ac.ebi.age.annotation.AnnotationDBInitException;
 import uk.ac.ebi.age.annotation.Topic;
 import uk.ac.ebi.age.ext.annotation.AnnotationDBException;
 import uk.ac.ebi.age.ext.entity.Entity;
+import uk.ac.ebi.age.transaction.DefaultTokenFactory;
 import uk.ac.ebi.age.transaction.InconsistentStateException;
 import uk.ac.ebi.age.transaction.InvalidStateException;
 import uk.ac.ebi.age.transaction.ReadLock;
+import uk.ac.ebi.age.transaction.ReadLockToken;
 import uk.ac.ebi.age.transaction.Transaction;
 import uk.ac.ebi.age.transaction.TransactionException;
+import uk.ac.ebi.age.transaction.TransactionToken;
+import uk.ac.ebi.age.transaction.UpgradableReadLock;
+import uk.ac.ebi.age.transaction.UpgradableReadLockToken;
 import uk.ac.ebi.mg.rwarbiter.InvalidTokenException;
-import uk.ac.ebi.mg.rwarbiter.RWArbiter;
-import uk.ac.ebi.mg.rwarbiter.TokenFactory;
-import uk.ac.ebi.mg.rwarbiter.TokenW;
+import uk.ac.ebi.mg.rwarbiter.TokenT;
+import uk.ac.ebi.mg.rwarbiter.UpgradableRWArbiter;
 
 public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
 {
  private static final String serialFileName = "annotdb.ser";
 
  private AnnotationCache cache;
-// private Map< Topic, SortedMap<String,Serializable> > annotMap;
 
- private static class TrnImp implements Transaction, TokenW
- {
-  boolean active = true;
+ private final UpgradableRWArbiter<ReadLockToken,TransactionToken,UpgradableReadLockToken> arbiter = new UpgradableRWArbiter<ReadLockToken,TransactionToken,UpgradableReadLockToken>( 
+   DefaultTokenFactory.getInstance());
 
-  public boolean isActive()
-  {
-   return active;
-  }
-
-  public void setActive(boolean active)
-  {
-   this.active = active;
-  }
- }
- 
- private RWArbiter<TrnImp> arbiter = new RWArbiter<TrnImp>( new TokenFactory<TrnImp>()
- {
-  @Override
-  public TrnImp createToken()
-  {
-   return new TrnImp();
-  }
- });
- 
- private FileResourceManager txManager;
- private String serialFileRelPath;
- private File serialFile;
+ private final FileResourceManager txManager;
+ private final String serialFileRelPath;
+ private final File serialFile;
  
  private boolean dirty = false;
  
@@ -202,7 +184,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
  {
   try
   {
-   arbiter.releaseLock((TrnImp) l);
+   arbiter.releaseLock((TokenT) l);
   }
   catch(InvalidTokenException e)
   {
@@ -219,7 +201,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
  @Override
  public void commitTransaction(Transaction t) throws TransactionException
  {
-  if(!((TrnImp) t).isActive())
+  if(!t.isActive())
    throw new InvalidStateException();
   
   
@@ -248,7 +230,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
   {
    try
    {
-    arbiter.releaseLock((TrnImp) t);
+    arbiter.releaseLock((TokenT) t);
    }
    catch(InvalidTokenException e)
    {
@@ -260,7 +242,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
  @Override
  public void rollbackTransaction(Transaction t) throws TransactionException
  {
-  if(!((TrnImp) t).isActive())
+  if(!t.isActive())
    throw new InvalidStateException();
 
   try
@@ -281,7 +263,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
   {
    try
    {
-    arbiter.releaseLock((TrnImp) t);
+    arbiter.releaseLock((TokenT) t);
    }
    catch(InvalidTokenException e)
    {
@@ -296,14 +278,14 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
  @Override
  public void prepareTransaction(Transaction t) throws TransactionException
  {
-  if(!((TrnImp) t).isActive())
+  if(!t.isActive())
    throw new InvalidStateException();
  }
 
  @Override
  public Object getAnnotation(ReadLock lock, Topic tpc, Entity objId, boolean recurs) throws AnnotationDBException
  {
-  if(!((TrnImp) lock).isActive())
+  if(!lock.isActive())
    throw new InvalidStateException();
 
 
@@ -328,7 +310,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
  @Override
  public boolean addAnnotation(Transaction trn, Topic tpc, Entity objId, Serializable value) throws AnnotationDBException
  {
-  if(!((TrnImp) trn).isActive())
+  if(!trn.isActive())
    throw new InvalidStateException();
 
   dirty = true;
@@ -339,7 +321,7 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
  @Override
  public boolean removeAnnotation(Transaction trn, Topic tpc, Entity objId, boolean rec) throws AnnotationDBException
  {
-  if(!((TrnImp) trn).isActive())
+  if(!trn.isActive())
    throw new InvalidStateException();
 
   dirty = true;
@@ -347,5 +329,24 @@ public class InMemoryAnnotationStorage extends AbstractAnnotationStorage
   String id = createEntityId(objId);
 
   return cache.removeAnnotation(tpc, id, rec);
+ }
+
+ @Override
+ public UpgradableReadLock getUpgradableReadLock()
+ {
+  return arbiter.getUpgradableReadLock();
+ }
+
+ @Override
+ public Transaction startTransaction(UpgradableReadLock rl)
+ {
+  try
+  {
+   return arbiter.upgradeReadLock((UpgradableReadLockToken)rl);
+  }
+  catch(InvalidTokenException e)
+  {
+   throw new InvalidStateException("Invalid transaction token");
+  }
  }
 }

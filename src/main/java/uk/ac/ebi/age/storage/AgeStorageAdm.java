@@ -49,6 +49,8 @@ public interface AgeStorageAdm extends AgeStorage
 
  GlobalObjectConnection getGlobalObjectConnection(String id);
  GlobalObjectConnection getGlobalFileConnection(String id);
+
+ GlobalObjectConnection getGlobalObjectConnectionRequest(String id);
  
 
 }
