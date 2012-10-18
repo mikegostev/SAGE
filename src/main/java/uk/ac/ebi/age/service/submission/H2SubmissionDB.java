@@ -8,6 +8,8 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -36,6 +38,7 @@ import uk.ac.ebi.age.ext.submission.SubmissionMeta;
 import uk.ac.ebi.age.ext.submission.SubmissionQuery;
 import uk.ac.ebi.age.ext.submission.SubmissionQuery.Selector;
 import uk.ac.ebi.age.ext.submission.SubmissionReport;
+import uk.ac.ebi.age.transaction.InconsistentStateException;
 import uk.ac.ebi.age.transaction.InvalidStateException;
 import uk.ac.ebi.age.transaction.ReadLock;
 import uk.ac.ebi.age.transaction.Transaction;
@@ -47,6 +50,7 @@ import uk.ac.ebi.mg.rwarbiter.InvalidTokenException;
 import uk.ac.ebi.mg.rwarbiter.UpgradableRWArbiter;
 
 import com.pri.util.M2Pcodec;
+import com.pri.util.Pair;
 import com.pri.util.StringUtils;
 
 public class H2SubmissionDB extends SubmissionDB
@@ -1452,9 +1456,9 @@ public class H2SubmissionDB extends SubmissionDB
 
   try
   {
-   arbiter.releaseLock((TokenT) l);
+   arbiter.releaseLock((SDBReadLock) l);
   }
-  catch(InvalidTokenException e)
+  catch(Exception e)
   {
    throw new InvalidStateException();
   }
@@ -1462,7 +1466,7 @@ public class H2SubmissionDB extends SubmissionDB
  }
 
  @Override
- public Transaction startTransaction()
+ public SDBTransaction startTransaction()
  {
   return arbiter.getWriteLock();
  }
@@ -1473,46 +1477,82 @@ public class H2SubmissionDB extends SubmissionDB
   if(!t.isActive())
    throw new InvalidStateException();
 
+  SDBTransaction sdbt = (SDBTransaction) t;
+
+  Connection conn = sdbt.getConnection();
+
   try
   {
-   if(!((TransactionToken) t).isPrepared())
+
+   if(conn != null)
    {
-    permConn.commit();
-    return;
+    try
+    {
+     if(!sdbt.isPrepared())
+      conn.commit();
+     else
+     {
+      Statement s = conn.createStatement();
+
+      s.executeUpdate("COMMIT TRANSACTION T1");
+     }
+    }
+    catch(SQLException e)
+    {
+     throw new TransactionException("SQL commit failed", e);
+    }
    }
-
-   Statement s = getStatement((TranTok) t);
-
-   s.executeUpdate("COMMIT TRANSACTION T1");
-  }
-  catch(SQLException e)
-  {
-   throw new TransactionException("Commit failed", e);
+   
+   if( sdbt.getTransactionId() != null )
+   {
+    try
+    {
+     txManager.commitTransaction(sdbt.getTransactionId());
+    }
+    catch(ResourceManagerException e)
+    {
+     throw new InconsistentStateException("File commit failed", e);
+    }
+   }
+   
+   if( sdbt.getLinks() != null )
+   {
+    for( Pair<Path,Path> l : sdbt.getLinks() )
+    {
+     try
+     {
+      Files.createLink(l.getFirst(), l.getSecond());
+     }
+     catch(IOException e)
+     {
+      throw new InconsistentStateException("Link commit failed", e);
+     }
+    }
+   }
   }
   finally
   {
    try
    {
-    arbiter.releaseLock((TranTok) t);
+    arbiter.releaseLock(sdbt);
    }
    catch(InvalidTokenException e)
    {
     throw new TransactionException("Invalid token type", e);
    }
 
-   Statement s = ((TranTok) t).getStatement();
-
-   if(s != null)
+   if(conn != null)
    {
     try
     {
-     s.close();
+     releaseConnection(conn);
     }
     catch(SQLException e)
     {
      e.printStackTrace();
     }
    }
+
   }
 
  }
