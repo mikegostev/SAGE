@@ -1,5 +1,6 @@
 package uk.ac.ebi.age.transaction;
 
+
 public interface TransactionalDB
 {
  ReadLock getReadLock();

@@ -1,7 +1,6 @@
 package uk.ac.ebi.age.service.submission;
 
 import java.nio.file.Path;
-import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,7 +12,6 @@ import com.pri.util.Pair;
 
 public final class SDBTransaction extends SDBReadLock implements Transaction
 {
- private Connection connection;
  private boolean prepared;
  private String transactionId;
  private List<Pair<Path, Path>> links;
@@ -22,15 +20,7 @@ public final class SDBTransaction extends SDBReadLock implements Transaction
  {
  }
 
- Connection getConnection()
- {
-  return connection;
- }
 
- void setConnection(Connection connection)
- {
-  this.connection = connection;
- }
 
  boolean isPrepared()
  {
